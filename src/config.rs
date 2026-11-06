@@ -61,7 +61,7 @@ impl Default for Config {
             editor: "nvim".into(),
             notify: true,
             sidebar_width: 32,
-            shell_percent: 40,
+            shell_percent: 50,
             ports: Ports::default(),
             attention: Attention::default(),
             keys: Keys::default(),
