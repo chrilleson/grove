@@ -111,7 +111,12 @@ impl Mux for Tmux {
         args.extend(["-P", "-F", "#{pane_id}", &s.sidebar_cmd]);
         let sidebar = self.run(&args)?;
 
-        let agent = self.run(&[
+        let agent_env: Vec<String> = s
+            .agent_env
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        let mut args: Vec<&str> = vec![
             "split-window",
             "-h",
             "-t",
@@ -121,7 +126,11 @@ impl Mux for Tmux {
             "-P",
             "-F",
             "#{pane_id}",
-        ])?;
+        ];
+        for e in &agent_env {
+            args.extend(["-e", e]);
+        }
+        let agent = self.run(&args)?;
         self.run(&[
             "split-window",
             "-h",

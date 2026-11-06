@@ -55,6 +55,17 @@ enum Cmd {
     Visit { session: Option<String> },
     /// Sidebar pane (runs inside task sessions)
     Sidebar,
+    /// Task picker popup
+    Dash,
+    /// Write config, tmux conf and Claude Code hooks
+    Init {
+        /// Print every change, write nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Root directory holding repos (repeatable); asked for if omitted
+        #[arg(long = "root")]
+        roots: Vec<String>,
+    },
 }
 
 pub fn main() -> Result<()> {
@@ -68,6 +79,7 @@ pub fn main() -> Result<()> {
             println!("{}", format_counts(open_store(&Config::load()?)?.counts()?));
             Ok(())
         }
+        Cmd::Init { dry_run, roots } => crate::init::run(dry_run, roots),
         cmd => {
             let config = Config::load()?;
             let store = open_store(&config)?;
@@ -79,7 +91,7 @@ pub fn main() -> Result<()> {
 
 fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
     match cmd {
-        Cmd::Hook { .. } | Cmd::Status => unreachable!(),
+        Cmd::Hook { .. } | Cmd::Status | Cmd::Init { .. } => unreachable!(),
         Cmd::New {
             repo,
             slug,
@@ -89,6 +101,7 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
             no_team,
             detach,
         } => {
+            let brief = brief.filter(|b| !b.trim().is_empty());
             let team = if team {
                 Some(true)
             } else if no_team {
@@ -163,7 +176,8 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Sidebar => crate::sidebar::run(config),
+        Cmd::Sidebar => crate::sidebar::run(config, false),
+        Cmd::Dash => crate::sidebar::run(config, true),
     }
 }
 

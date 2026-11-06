@@ -113,3 +113,14 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
 pub fn has_tmux() -> bool {
     Std::new("tmux").arg("-V").output().is_ok()
 }
+
+/// Poll for up to 3 s; tmux panes start asynchronously.
+pub fn wait_for<T>(mut f: impl FnMut() -> Option<T>) -> Option<T> {
+    for _ in 0..30 {
+        if let Some(v) = f() {
+            return Some(v);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    None
+}

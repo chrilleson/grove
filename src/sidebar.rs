@@ -85,12 +85,13 @@ pub fn parse_duration(s: &str) -> Option<i64> {
 fn render(
     tasks: &[Task],
     current: Option<&str>,
+    selected: Option<usize>,
     now: i64,
     width: usize,
     blink_after: i64,
 ) -> Text<'static> {
     let mut lines = vec![];
-    for t in tasks {
+    for (i, t) in tasks.iter().enumerate() {
         let mut style = Style::default();
         if t.state == State::Done && !t.seen {
             style = style.add_modifier(Modifier::BOLD);
@@ -98,7 +99,7 @@ fn render(
         if t.state == State::Waiting && now - t.state_since >= blink_after {
             style = style.add_modifier(Modifier::SLOW_BLINK | Modifier::BOLD);
         }
-        if Some(t.id.as_str()) == current {
+        if Some(t.id.as_str()) == current || selected == Some(i) {
             style = style.add_modifier(Modifier::REVERSED);
         }
         let [top, sub] = row_lines(t, now, width);
@@ -116,45 +117,61 @@ fn render(
     Text::from(lines)
 }
 
-pub fn run(config: &Config) -> Result<()> {
+/// The sidebar pane, or with `popup` the `⌥s` picker: j/k/Enter, digits,
+/// q/Esc to close.
+pub fn run(config: &Config, popup: bool) -> Result<()> {
     let store = crate::cli::open_store(config)?;
     let current = std::env::var("GROVE_TASK").ok();
     let blink_after = parse_duration(&config.attention.blink_after).unwrap_or(120);
     let mux = Tmux::from_env();
+    let mut selected = 0usize;
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
         loop {
             let tasks = store.list()?;
+            selected = selected.min(tasks.len().saturating_sub(1));
             let now = crate::now();
+            let sel = popup.then_some(selected);
             terminal.draw(|f| {
                 let area = f.area();
-                f.render_widget(
-                    Paragraph::new(render(
-                        &tasks,
-                        current.as_deref(),
-                        now,
-                        area.width as usize,
-                        blink_after,
-                    )),
-                    area,
+                let text = render(
+                    &tasks,
+                    current.as_deref(),
+                    sel,
+                    now,
+                    area.width as usize,
+                    blink_after,
                 );
+                f.render_widget(Paragraph::new(text), area);
             })?;
-            if event::poll(Duration::from_millis(500))?
-                && let Event::Key(k) = event::read()?
-            {
-                if k.kind != KeyEventKind::Press {
-                    continue;
+            if !event::poll(Duration::from_millis(500))? {
+                continue;
+            }
+            let Event::Key(k) = event::read()? else {
+                continue;
+            };
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            let target = match k.code {
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                KeyCode::Char('q') | KeyCode::Esc if popup => return Ok(()),
+                KeyCode::Char('j') | KeyCode::Down => {
+                    selected += 1;
+                    None
                 }
-                match k.code {
-                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(());
-                    }
-                    KeyCode::Char(d @ '1'..='9') => {
-                        if let Some(t) = store.by_number(d as i64 - '0' as i64)? {
-                            let _ = mux.switch_to(&t.session);
-                        }
-                    }
-                    _ => {}
+                KeyCode::Char('k') | KeyCode::Up => {
+                    selected = selected.saturating_sub(1);
+                    None
+                }
+                KeyCode::Enter if popup => tasks.get(selected).cloned(),
+                KeyCode::Char(d @ '1'..='9') => store.by_number(d as i64 - '0' as i64)?,
+                _ => None,
+            };
+            if let Some(t) = target {
+                let _ = mux.switch_to(&t.session);
+                if popup {
+                    return Ok(());
                 }
             }
         }

@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 pub mod hook;
+pub mod init;
 pub mod mux;
 pub mod notify;
 pub mod paths;

@@ -58,6 +58,13 @@ fn new_creates_worktree_setup_and_session() {
     assert!(env.contains("GROVE_PORT=20000"), "{env}");
     assert!(env.contains("PORT=20000"), "{env}");
 
+    // the agent pane got the brief and typed the agent command
+    let agent = wait_for(|| {
+        let out = w.tmux(&["capture-pane", "-p", "-t", "=api-fix-login:0.1"]);
+        out.contains("agent Fix it").then_some(out)
+    });
+    assert!(agent.is_some(), "agent pane never showed the brief");
+
     // second task gets the next number and port block; duplicate refused
     w.grove()
         .args(["new", "api", "other", "--detach"])
