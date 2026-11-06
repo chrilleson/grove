@@ -91,6 +91,7 @@ pub struct Transition {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Counts {
     pub waiting: usize,
+    pub working: usize,
     pub done_unseen: usize,
 }
 
@@ -333,9 +334,16 @@ impl Store {
 
     pub fn counts(&self) -> Result<Counts> {
         Ok(self.conn.query_row(
-            "SELECT COALESCE(SUM(state = 'waiting'), 0), COALESCE(SUM(state = 'done' AND seen = 0), 0) FROM tasks",
+            "SELECT COALESCE(SUM(state = 'waiting'), 0), COALESCE(SUM(state = 'working'), 0),
+                    COALESCE(SUM(state = 'done' AND seen = 0), 0) FROM tasks",
             [],
-            |r| Ok(Counts { waiting: r.get::<_, i64>(0)? as usize, done_unseen: r.get::<_, i64>(1)? as usize }),
+            |r| {
+                Ok(Counts {
+                    waiting: r.get::<_, i64>(0)? as usize,
+                    working: r.get::<_, i64>(1)? as usize,
+                    done_unseen: r.get::<_, i64>(2)? as usize,
+                })
+            },
         )?)
     }
 }

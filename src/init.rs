@@ -71,7 +71,7 @@ pub fn tmux_conf(config: &Config, exe: &str) -> String {
     line(String::new());
     line("# Once per server, so re-sourcing doesn't stack the counter or the hook.".into());
     line("if-shell -F '#{!=:#{@grove-loaded},1}' {".into());
-    line(format!("  set-option -ga status-right ' #({exe} status)'"));
+    line(format!("  set-option -ga status-right ' #({exe} status --tmux)'"));
     line(format!(
         "  set-hook -ga client-session-changed \"run-shell -b '{exe} visit #{{client_session}}'\""
     ));

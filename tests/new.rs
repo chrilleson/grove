@@ -27,11 +27,20 @@ fn new_creates_worktree_setup_and_session() {
 
     let wt = w.root().join(".worktrees/api/fix-login");
     assert_eq!(git(&wt, &["branch", "--show-current"]), "fix-login");
+    // setup runs in the shell pane, so the session exists before it finishes
+    let ports = wait_for(|| {
+        std::fs::read_to_string(wt.join("ports.txt"))
+            .ok()
+            .filter(|s| !s.is_empty())
+    });
+    assert_eq!(ports.as_deref().map(str::trim), Some("20000 20001"));
     assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=1\n");
+    // the brief is a file in the worktree, hidden from git
     assert_eq!(
-        std::fs::read_to_string(wt.join("ports.txt")).unwrap().trim(),
-        "20000 20001"
+        std::fs::read_to_string(wt.join(".grove/brief.md")).unwrap(),
+        "Fix it\n"
     );
+    assert!(!git(&wt, &["status", "--porcelain"]).contains(".grove"));
 
     let store = Store::open(&w.state_db(), 20000, 10).unwrap();
     let t = store.get("api/fix-login").unwrap().expect("task stored");
@@ -47,12 +56,36 @@ fn new_creates_worktree_setup_and_session() {
     assert!(env.contains("GROVE_PORT=20000"), "{env}");
     assert!(env.contains("PORT=20000"), "{env}");
 
-    // the agent pane got the brief and typed the agent command
+    // after setup, the agent is started on the brief
     let agent = wait_for(|| {
-        let out = w.tmux(&["capture-pane", "-p", "-t", "=api-fix-login:0.1"]);
-        out.contains("agent Fix it").then_some(out)
+        let out = w.tmux(&["capture-pane", "-J", "-p", "-t", "=api-fix-login:0.1"]);
+        out.contains("agent Read .grove/brief.md and start.")
+            .then_some(out)
     });
-    assert!(agent.is_some(), "agent pane never showed the brief");
+    assert!(agent.is_some(), "agent never started on the brief");
+
+    // panes carry a role and a header title
+    let panes = w.tmux(&[
+        "list-panes",
+        "-t",
+        "=api-fix-login",
+        "-F",
+        "#{@grove_role}|#{@grove_title}",
+    ]);
+    let lines: Vec<_> = panes.lines().collect();
+    assert_eq!(lines[0], "sidebar|grove");
+    assert_eq!(lines[1], "agent|claude · api/fix-login");
+    assert!(lines[2].starts_with("shell|"), "{panes}");
+    assert_eq!(
+        w.tmux(&[
+            "show-options",
+            "-wv",
+            "-t",
+            "=api-fix-login:",
+            "pane-border-status"
+        ]),
+        "top"
+    );
 
     // sidebar is the configured width and stays so when the window resizes
     let widths = || w.tmux(&["list-panes", "-t", "=api-fix-login", "-F", "#{pane_width}"]);

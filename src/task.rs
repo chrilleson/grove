@@ -1,7 +1,7 @@
 //! Task lifecycle: find the repo, make the worktree, run setup, open the session.
 
 use crate::config::Config;
-use crate::mux::{Mux, SessionSpec};
+use crate::mux::{Mux, Role, SessionSpec};
 use crate::setup::{self, RepoConfig};
 use crate::store::{NewTask, Signal, Store, Task, session_name};
 use anyhow::{Context, Result, bail};
@@ -179,41 +179,100 @@ pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) ->
         crate::now(),
     )?;
 
+    if let Some(brief) = opts.brief.as_deref() {
+        write_brief(&wt, brief)?;
+    }
+
     let mut env = vec![("GROVE_TASK".to_string(), task.id.clone())];
     env.extend(rc.port_env(task.port_base));
     if team {
         env.push(("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), "1".into()));
     }
 
-    if let Some(failed) = setup::run(&rc, &repo.dir, &wt, &env)? {
-        store.apply(&task.id, Signal::Idle, crate::now(), false)?;
-        store.set_info(&task.id, &format!("setup failed: {failed}"))?;
-        eprintln!("grove: setup command failed: {failed} (task kept; fix it in the shell pane)");
-    }
-
-    let mut agent_cmd = config.agent_command.clone();
-    if team {
-        agent_cmd.push_str(" --teammate-mode tmux");
-    }
-    let mut agent_env = vec![];
-    if let Some(brief) = &opts.brief {
-        // Passed through the environment so no shell (bash, zsh, fish) needs quoting rules.
-        agent_cmd.push_str(" \"$GROVE_BRIEF\"");
-        agent_env.push(("GROVE_BRIEF".to_string(), brief.clone()));
-    }
-
     let exe = std::env::current_exe()?.to_string_lossy().into_owned();
+    let shell = std::env::var("SHELL").ok();
+    let shell = shell
+        .as_deref()
+        .and_then(|s| s.rsplit('/').next())
+        .unwrap_or("shell");
     mux.create_task_session(&SessionSpec {
         name: session,
-        cwd: wt,
+        cwd: wt.clone(),
         env,
         sidebar_cmd: format!("'{exe}' sidebar"),
         sidebar_width: config.sidebar_width,
         shell_percent: config.shell_percent,
-        agent_cmd,
-        agent_env,
+        agent_title: format!("claude · {}", task.id),
+        shell_title: format!("{shell} · {}", crate::paths::tilde(&wt)),
+        shell_first: Some(format!("'{exe}' setup '{}'", task.id)),
     })?;
     Ok(store.get(&task.id)?.expect("exists"))
+}
+
+const BRIEF: &str = ".grove/brief.md";
+
+/// Write the brief into the worktree and hide `.grove/` from git via the
+/// repo's local exclude file, so it never shows up as a change.
+fn write_brief(wt: &Path, brief: &str) -> Result<()> {
+    let path = wt.join(BRIEF);
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, format!("{}\n", brief.trim_end()))?;
+    let common = PathBuf::from(git(wt, &["rev-parse", "--git-common-dir"])?);
+    let exclude = if common.is_absolute() {
+        common
+    } else {
+        wt.join(common)
+    }
+    .join("info/exclude");
+    let current = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if !current.lines().any(|l| l.trim() == ".grove/") {
+        std::fs::create_dir_all(exclude.parent().unwrap())?;
+        let sep = if current.is_empty() || current.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        std::fs::write(&exclude, format!("{current}{sep}.grove/\n"))?;
+    }
+    Ok(())
+}
+
+/// `grove setup <task>`: runs in the shell pane of a new session. Streams
+/// setup output, then starts the agent in the agent pane.
+pub fn run_setup(config: &Config, store: &Store, mux: &dyn Mux, id: &str) -> Result<()> {
+    let task = store.get(id)?.with_context(|| format!("no task {id}"))?;
+    let wt = PathBuf::from(&task.worktree);
+    let repo = PathBuf::from(&task.root).join(&task.repo);
+    let rc = RepoConfig::load(&task.repo, &repo)?;
+    let mut env = vec![("GROVE_TASK".to_string(), task.id.clone())];
+    env.extend(rc.port_env(task.port_base));
+
+    println!("grove: session {} · {}", task.id, crate::paths::tilde(&wt));
+    println!("grove: branch {} · GROVE_PORT={}", task.branch, task.port_base);
+    if let Some(failed) = setup::run(&rc, &repo, &wt, &env)? {
+        store.apply(&task.id, Signal::Idle, crate::now(), false)?;
+        store.set_info(&task.id, &format!("setup failed: {failed}"))?;
+        println!("grove: setup failed: {failed}");
+        println!("grove: fix it here, then run: grove setup {}", task.id);
+        return Ok(());
+    }
+
+    let mut agent_cmd = config.agent_command.clone();
+    if task.team {
+        agent_cmd.push_str(" --teammate-mode tmux");
+    }
+    let has_brief = wt.join(BRIEF).exists();
+    if has_brief {
+        agent_cmd.push_str(" \"Read .grove/brief.md and start.\"");
+    }
+    mux.type_into(&task.session, Role::Agent, &agent_cmd)?;
+    println!(
+        "grove: started {}{}{}",
+        config.agent_command.split_whitespace().next().unwrap_or("agent"),
+        if has_brief { " on the brief" } else { "" },
+        if task.team { " (agent team)" } else { "" }
+    );
+    Ok(())
 }
 
 /// Why a task's worktree can't be removed without losing work.

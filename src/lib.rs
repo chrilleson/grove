@@ -9,6 +9,7 @@ pub mod setup;
 pub mod sidebar;
 pub mod store;
 pub mod task;
+pub mod theme;
 
 /// Unix seconds.
 pub fn now() -> i64 {
