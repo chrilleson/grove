@@ -15,6 +15,8 @@ fn tmux_conf_binds_alt_keys_and_hooks() {
         "bind-key -n M-1 run-shell -b '/opt/bin/grove go 1'",
         "bind-key -n M-9 run-shell -b '/opt/bin/grove go 9'",
         "set-hook -ga client-session-changed",
+        "bind-key -n M-g switch-client -T grove",
+        "bind-key -T grove x confirm-before",
     ] {
         assert!(conf.contains(needle), "missing {needle:?} in\n{conf}");
     }
@@ -45,11 +47,7 @@ fn tmux_conf_is_valid_tmux_syntax() {
         .arg(&path)
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(w.tmux(&["list-keys", "-T", "root"]).contains("M-w"));
     // sourcing twice must not duplicate the status counter
     std::process::Command::new("tmux")
@@ -98,10 +96,7 @@ fn init_dry_run_writes_nothing() {
         .args(["init", "--dry-run", "--root", "~/dev"])
         .assert()
         .success()
-        .stdout(
-            predicates::str::contains("grove.tmux.conf")
-                .and(predicates::str::contains("settings.json")),
-        );
+        .stdout(predicates::str::contains("grove.tmux.conf").and(predicates::str::contains("settings.json")));
     assert!(!w.config_dir().join("config.toml").exists());
     assert!(!w.path().join(".claude/settings.json").exists());
 }
@@ -109,17 +104,13 @@ fn init_dry_run_writes_nothing() {
 #[test]
 fn init_writes_config_tmux_conf_and_claude_settings() {
     let w = World::new();
-    w.grove()
-        .args(["init", "--root", "~/dev"])
-        .assert()
-        .success();
+    w.grove().args(["init", "--root", "~/dev"]).assert().success();
     let cfg = std::fs::read_to_string(w.config_dir().join("config.toml")).unwrap();
     assert!(cfg.contains("~/dev"), "{cfg}");
     assert!(w.config_dir().join("grove.tmux.conf").exists());
-    let settings: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(w.path().join(".claude/settings.json")).unwrap(),
-    )
-    .unwrap();
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(w.path().join(".claude/settings.json")).unwrap())
+            .unwrap();
     assert!(settings["hooks"]["Stop"].is_array());
 }
 

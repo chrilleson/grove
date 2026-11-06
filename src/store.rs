@@ -100,9 +100,10 @@ pub struct Store {
     port_block: i64,
 }
 
-/// tmux treats `.` and `:` specially in targets.
+/// tmux treats `.` and `:` specially in targets; a leading dot (dotfiles
+/// repos) would turn into an ugly `_`, so it is dropped.
 pub fn session_name(repo: &str, slug: &str) -> String {
-    format!("{repo}-{slug}").replace(['.', ':'], "_")
+    format!("{}-{slug}", repo.trim_start_matches('.')).replace(['.', ':'], "_")
 }
 
 const SCHEMA: &str = "
@@ -267,13 +268,7 @@ impl Store {
     /// Apply a signal from the agent. `viewed` is whether a client is looking at
     /// the task's session right now. Returns `None` when nothing changed, so hot
     /// hooks (PreToolUse) cost one read and no write.
-    pub fn apply(
-        &self,
-        id: &str,
-        signal: Signal,
-        now: i64,
-        viewed: bool,
-    ) -> Result<Option<Transition>> {
+    pub fn apply(&self, id: &str, signal: Signal, now: i64, viewed: bool) -> Result<Option<Transition>> {
         let Some(before) = self.get(id)? else {
             return Ok(None);
         };
@@ -294,8 +289,7 @@ impl Store {
         )?;
         let task = self.get(id)?.expect("exists");
         Ok(Some(Transition {
-            newly_needs_you: task.needs_you()
-                && (task.state != before.state || !before.needs_you()),
+            newly_needs_you: task.needs_you() && (task.state != before.state || !before.needs_you()),
             from: before.state,
             to,
             task,
@@ -303,10 +297,8 @@ impl Store {
     }
 
     pub fn set_info(&self, id: &str, info: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE tasks SET info = ?2 WHERE id = ?1",
-            params![id, info],
-        )?;
+        self.conn
+            .execute("UPDATE tasks SET info = ?2 WHERE id = ?1", params![id, info])?;
         Ok(())
     }
 

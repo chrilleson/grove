@@ -12,6 +12,7 @@ pub struct SessionSpec {
     /// Runs as the left pane's command.
     pub sidebar_cmd: String,
     pub sidebar_width: u16,
+    pub shell_percent: u8,
     /// Typed into the middle pane's shell, so the pane survives the agent exiting.
     pub agent_cmd: String,
     /// Extra environment for the agent pane only (e.g. `GROVE_BRIEF`).
@@ -39,9 +40,7 @@ impl Tmux {
     /// `GROVE_TMUX_SOCKET` selects a private server (`tmux -L`); tests use it.
     pub fn from_env() -> Tmux {
         Tmux {
-            socket: std::env::var("GROVE_TMUX_SOCKET")
-                .ok()
-                .filter(|s| !s.is_empty()),
+            socket: std::env::var("GROVE_TMUX_SOCKET").ok().filter(|s| !s.is_empty()),
         }
     }
 
@@ -75,6 +74,18 @@ impl Tmux {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     }
 
+    /// Size of the client we're called from, else this terminal, else a big default.
+    fn client_size(&self) -> (u16, u16) {
+        if self.inside_tmux()
+            && let Ok(out) = self.run(&["display-message", "-p", "#{client_width} #{client_height}"])
+            && let Some((w, h)) = out.split_once(' ')
+            && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
+        {
+            return (w, h);
+        }
+        ratatui::crossterm::terminal::size().unwrap_or((240, 60))
+    }
+
     fn inside_tmux(&self) -> bool {
         std::env::var_os("TMUX").is_some()
     }
@@ -92,30 +103,19 @@ impl Mux for Tmux {
     fn create_task_session(&self, s: &SessionSpec) -> Result<()> {
         let cwd = s.cwd.to_string_lossy();
         let env: Vec<String> = s.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        // Build the layout at the size it will be seen at, so tmux doesn't
+        // rescale the panes proportionally on attach.
+        let (w, h) = self.client_size();
+        let (w, h) = (w.to_string(), h.to_string());
 
-        let mut args: Vec<&str> = vec![
-            "new-session",
-            "-d",
-            "-s",
-            &s.name,
-            "-c",
-            &cwd,
-            "-x",
-            "240",
-            "-y",
-            "60",
-        ];
+        let mut args: Vec<&str> = vec!["new-session", "-d", "-s", &s.name, "-c", &cwd, "-x", &w, "-y", &h];
         for e in &env {
             args.extend(["-e", e]);
         }
         args.extend(["-P", "-F", "#{pane_id}", &s.sidebar_cmd]);
         let sidebar = self.run(&args)?;
 
-        let agent_env: Vec<String> = s
-            .agent_env
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect();
+        let agent_env: Vec<String> = s.agent_env.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let mut args: Vec<&str> = vec![
             "split-window",
             "-h",
@@ -131,24 +131,22 @@ impl Mux for Tmux {
             args.extend(["-e", e]);
         }
         let agent = self.run(&args)?;
+        let shell_size = format!("{}%", s.shell_percent.clamp(10, 90));
+        self.run(&["split-window", "-h", "-t", &agent, "-l", &shell_size, "-c", &cwd])?;
+
+        let width = s.sidebar_width.to_string();
+        self.run(&["resize-pane", "-t", &sidebar, "-x", &width])?;
+        // Keep the sidebar fixed when the terminal or another client resizes the window.
+        let keep = format!("resize-pane -t {sidebar} -x {width}");
         self.run(&[
-            "split-window",
-            "-h",
+            "set-hook",
+            "-w",
             "-t",
-            &agent,
-            "-c",
-            &cwd,
-            "-P",
-            "-F",
-            "#{pane_id}",
+            &format!("{}:", exact(&s.name)),
+            "window-resized",
+            &keep,
         ])?;
-        self.run(&[
-            "resize-pane",
-            "-t",
-            &sidebar,
-            "-x",
-            &s.sidebar_width.to_string(),
-        ])?;
+
         self.run(&["send-keys", "-t", &agent, "-l", &s.agent_cmd])?;
         self.run(&["send-keys", "-t", &agent, "Enter"])?;
         self.run(&["select-pane", "-t", &agent])?;
@@ -156,6 +154,11 @@ impl Mux for Tmux {
     }
 
     fn kill_session(&self, name: &str) -> Result<()> {
+        if !self.session_exists(name) {
+            return Ok(());
+        }
+        // Move clients on this session to another one instead of detaching them.
+        let _ = self.run(&["set-option", "-t", &exact(name), "detach-on-destroy", "off"]);
         self.run(&["kill-session", "-t", &exact(name)]).map(|_| ())
     }
 
@@ -178,10 +181,7 @@ impl Mux for Tmux {
         if self.inside_tmux() {
             self.run(&["switch-client", "-t", &exact(name)]).map(|_| ())
         } else {
-            let status = self
-                .cmd()
-                .args(["attach-session", "-t", &exact(name)])
-                .status()?;
+            let status = self.cmd().args(["attach-session", "-t", &exact(name)]).status()?;
             if !status.success() {
                 bail!("tmux attach-session failed");
             }
