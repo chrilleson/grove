@@ -27,14 +27,9 @@ fn new_creates_worktree_setup_and_session() {
 
     let wt = w.root().join(".worktrees/api/fix-login");
     assert_eq!(git(&wt, &["branch", "--show-current"]), "fix-login");
+    assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=1\n");
     assert_eq!(
-        std::fs::read_to_string(wt.join(".env")).unwrap(),
-        "SECRET=1\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(wt.join("ports.txt"))
-            .unwrap()
-            .trim(),
+        std::fs::read_to_string(wt.join("ports.txt")).unwrap().trim(),
         "20000 20001"
     );
 
@@ -45,13 +40,7 @@ fn new_creates_worktree_setup_and_session() {
         (1, 20000, "api-fix-login")
     );
 
-    let panes = w.tmux(&[
-        "list-panes",
-        "-t",
-        "=api-fix-login",
-        "-F",
-        "#{pane_current_path}",
-    ]);
+    let panes = w.tmux(&["list-panes", "-t", "=api-fix-login", "-F", "#{pane_current_path}"]);
     assert_eq!(panes.lines().count(), 3, "sidebar | agent | shell: {panes}");
     let env = w.tmux(&["show-environment", "-t", "=api-fix-login"]);
     assert!(env.contains("GROVE_TASK=api/fix-login"), "{env}");
@@ -65,6 +54,16 @@ fn new_creates_worktree_setup_and_session() {
     });
     assert!(agent.is_some(), "agent pane never showed the brief");
 
+    // sidebar is the configured width and stays so when the window resizes
+    let widths = || w.tmux(&["list-panes", "-t", "=api-fix-login", "-F", "#{pane_width}"]);
+    assert_eq!(widths().lines().next(), Some("32"), "{}", widths());
+    w.tmux(&["resize-window", "-t", "=api-fix-login", "-x", "150", "-y", "40"]);
+    assert!(
+        wait_for(|| (widths().lines().next() == Some("32")).then_some(())).is_some(),
+        "sidebar drifted after resize: {}",
+        widths()
+    );
+
     // second task gets the next number and port block; duplicate refused
     w.grove()
         .args(["new", "api", "other", "--detach"])
@@ -76,9 +75,11 @@ fn new_creates_worktree_setup_and_session() {
         .assert()
         .failure();
 
-    w.grove().arg("ls").assert().success().stdout(
-        predicates::str::contains("api/fix-login").and(predicates::str::contains("api/other")),
-    );
+    w.grove()
+        .arg("ls")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("api/fix-login").and(predicates::str::contains("api/other")));
 }
 
 #[test]
@@ -90,4 +91,79 @@ fn unknown_repo_is_an_error() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("nope"));
+}
+
+#[test]
+fn rm_removes_clean_task_and_refuses_dirty_one_without_force() {
+    if !has_tmux() {
+        return;
+    }
+    let w = World::new();
+    w.write_config("");
+    let repo = w.git_repo("api");
+    w.grove()
+        .args(["new", "api", "clean", "--detach"])
+        .assert()
+        .success();
+    w.grove()
+        .args(["new", "api", "dirty", "--detach"])
+        .assert()
+        .success();
+    let dirty_wt = w.root().join(".worktrees/api/dirty");
+    std::fs::write(dirty_wt.join("wip.txt"), "unsaved").unwrap();
+
+    w.grove().args(["rm", "api/clean"]).assert().success();
+    assert!(!w.root().join(".worktrees/api/clean").exists());
+    assert!(!git(&repo, &["branch", "--list", "clean"]).contains("clean"));
+    assert!(
+        !w.tmux(&["list-sessions", "-F", "#{session_name}"])
+            .contains("api-clean")
+    );
+
+    w.grove()
+        .args(["rm", "api/dirty"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("uncommitted"));
+    assert!(dirty_wt.exists());
+
+    w.grove().args(["rm", "api/dirty", "--force"]).assert().success();
+    assert!(!dirty_wt.exists());
+    w.grove().arg("ls").assert().success().stdout("");
+}
+
+#[test]
+fn rm_refuses_commits_that_exist_only_on_the_task_branch() {
+    if !has_tmux() {
+        return;
+    }
+    let w = World::new();
+    w.write_config("");
+    w.git_repo("api");
+    w.grove()
+        .args(["new", "api", "work", "--detach"])
+        .assert()
+        .success();
+    let wt = w.root().join(".worktrees/api/work");
+    std::fs::write(wt.join("new.txt"), "x").unwrap();
+    git(&wt, &["add", "."]);
+    git(
+        &wt,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "work",
+        ],
+    );
+
+    w.grove()
+        .args(["rm", "api/work"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("1 commit"));
+    w.grove().args(["rm", "api/work", "--force"]).assert().success();
 }

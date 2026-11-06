@@ -15,6 +15,8 @@ pub struct Config {
     pub editor: String,
     pub notify: bool,
     pub sidebar_width: u16,
+    /// Width of the shell pane as a share of what the sidebar leaves.
+    pub shell_percent: u8,
     pub ports: Ports,
     pub attention: Attention,
     pub keys: Keys,
@@ -59,6 +61,7 @@ impl Default for Config {
             editor: "nvim".into(),
             notify: true,
             sidebar_width: 32,
+            shell_percent: 40,
             ports: Ports::default(),
             attention: Attention::default(),
             keys: Keys::default(),

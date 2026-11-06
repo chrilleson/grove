@@ -13,10 +13,7 @@ pub struct World {
 impl World {
     pub fn new() -> World {
         let dir = tempfile::tempdir().unwrap();
-        let socket = format!(
-            "grove-test-{}",
-            dir.path().file_name().unwrap().to_string_lossy()
-        );
+        let socket = format!("grove-test-{}", dir.path().file_name().unwrap().to_string_lossy());
         let w = World { dir, socket };
         std::fs::create_dir_all(w.root()).unwrap();
         std::fs::create_dir_all(w.config_dir()).unwrap();
@@ -96,12 +93,7 @@ impl Drop for World {
 }
 
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Std::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
+    let out = Std::new("git").arg("-C").arg(dir).args(args).output().unwrap();
     assert!(
         out.status.success(),
         "git {args:?}: {}",

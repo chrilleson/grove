@@ -3,10 +3,7 @@
 use std::process::{Command, Stdio};
 
 pub fn enabled(config_notify: bool) -> bool {
-    config_notify
-        && std::env::var("GROVE_NOTIFY")
-            .map(|v| v != "0")
-            .unwrap_or(true)
+    config_notify && std::env::var("GROVE_NOTIFY").map(|v| v != "0").unwrap_or(true)
 }
 
 pub fn send(title: &str, body: &str) {

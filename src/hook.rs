@@ -15,9 +15,7 @@ pub fn signal_for(event: &str, payload: &Value) -> Option<Signal> {
         "PermissionRequest" => Some(Signal::Waiting),
         "Notification" => match payload.get("notification_type").and_then(Value::as_str) {
             // Older Claude Code versions send no type; every notification was a prompt.
-            None | Some("permission_prompt" | "idle_prompt" | "elicitation_dialog") => {
-                Some(Signal::Waiting)
-            }
+            None | Some("permission_prompt" | "idle_prompt" | "elicitation_dialog") => Some(Signal::Waiting),
             Some(_) => None,
         },
         "Stop" => Some(Signal::Done {
@@ -31,10 +29,7 @@ pub fn signal_for(event: &str, payload: &Value) -> Option<Signal> {
 }
 
 fn last_message(payload: &Value) -> Option<String> {
-    if let Some(m) = payload
-        .get("last_assistant_message")
-        .and_then(Value::as_str)
-    {
+    if let Some(m) = payload.get("last_assistant_message").and_then(Value::as_str) {
         return Some(m.to_string());
     }
     let path = payload.get("transcript_path")?.as_str()?;
@@ -77,9 +72,7 @@ fn one_line(s: &str) -> Option<String> {
 /// Entry point. Swallows every error: a broken grove must never break Claude.
 pub fn run(event: &str) {
     if let Err(e) = try_run(event) {
-        let _ = log_line(
-            &serde_json::json!({ "ts": crate::now(), "event": event, "error": e.to_string() }),
-        );
+        let _ = log_line(&serde_json::json!({ "ts": crate::now(), "event": event, "error": e.to_string() }));
     }
 }
 
@@ -96,10 +89,7 @@ fn try_run(event: &str) -> anyhow::Result<()> {
     };
     let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-    if std::env::var("GROVE_LOG_HOOKS")
-        .map(|v| v != "0")
-        .unwrap_or(true)
-    {
+    if std::env::var("GROVE_LOG_HOOKS").map(|v| v != "0").unwrap_or(true) {
         log_line(&serde_json::json!({
             "ts": crate::now(),
             "task": task_id,
@@ -112,11 +102,7 @@ fn try_run(event: &str) -> anyhow::Result<()> {
         return Ok(());
     };
     let config = Config::load().unwrap_or_default();
-    let store = Store::open(
-        &crate::paths::state_db(),
-        config.ports.start,
-        config.ports.block,
-    )?;
+    let store = Store::open(&crate::paths::state_db(), config.ports.start, config.ports.block)?;
 
     // Only ask tmux when the answer matters (rare events), never on PreToolUse.
     let attention = matches!(signal, Signal::Waiting | Signal::Done { .. });
@@ -148,10 +134,7 @@ fn log_line(v: &Value) -> anyhow::Result<()> {
     use std::io::Write;
     let path = crate::paths::hook_log();
     std::fs::create_dir_all(path.parent().unwrap())?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(f, "{v}")?;
     Ok(())
 }
