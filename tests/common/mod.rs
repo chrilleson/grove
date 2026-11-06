@@ -76,7 +76,7 @@ impl World {
 
     pub fn tmux(&self, args: &[&str]) -> String {
         let out = Std::new("tmux")
-            .args(["-L", &self.socket])
+            .args(["-u", "-L", &self.socket])
             .args(args)
             .output()
             .unwrap();

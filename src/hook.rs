@@ -112,20 +112,24 @@ fn try_run(event: &str) -> anyhow::Result<()> {
         tmux.viewed_sessions().contains(&session)
     };
 
-    if let Some(t) = store.apply(&task_id, signal, crate::now(), viewed)?
-        && t.newly_needs_you
-        && !viewed
-        && crate::notify::enabled(config.notify)
+    let Some(t) = store.apply(&task_id, signal, crate::now(), viewed)? else {
+        return Ok(());
+    };
+
+    // Show the new state in the agent pane's header.
+    if Tmux::reachable_from_env()
+        && let Ok(pane) = std::env::var("TMUX_PANE")
     {
-        let what = if t.to == crate::store::State::Waiting {
-            "needs you"
+        tmux.set_pane_state(&pane, &pane_state(&t.task));
+    }
+
+    if t.newly_needs_you && !viewed && crate::notify::enabled(config.notify) {
+        let body = if t.to == crate::store::State::Waiting {
+            "is waiting for you. Jump with ⌥w"
         } else {
-            "is done"
+            "finished its turn. Ready for review (⌥w)"
         };
-        crate::notify::send(
-            &format!("{} {what}", t.task.id),
-            t.task.info.as_deref().unwrap_or(""),
-        );
+        crate::notify::send(&format!("grove · {}", t.task.id), body);
     }
     Ok(())
 }
@@ -137,4 +141,13 @@ fn log_line(v: &Value) -> anyhow::Result<()> {
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(f, "{v}")?;
     Ok(())
+}
+
+fn pane_state(t: &crate::store::Task) -> String {
+    let color = crate::sidebar::state_color(t);
+    format!(
+        "#[fg={color}]{} {}#[default]",
+        crate::sidebar::icon(t),
+        crate::sidebar::state_words(t)
+    )
 }

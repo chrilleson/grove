@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::mux::{Mux, Tmux};
+use crate::mux::{Mux, Role, Tmux};
 use crate::store::{Counts, Store};
 use crate::task::NewOpts;
 use anyhow::Result;
@@ -20,8 +20,12 @@ struct Cli {
 enum Cmd {
     /// Claude Code hook entry point (reads the hook JSON on stdin)
     Hook { event: String },
-    /// Status-line counter, e.g. `⏳2 ✓1`
-    Status,
+    /// Status-line counter, e.g. `⏳2 ●3 ✓1`
+    Status {
+        /// Colour it with tmux style tags
+        #[arg(long)]
+        tmux: bool,
+    },
     /// Create a task: worktree, setup, tmux session, agent
     New {
         /// Repo name under a root, or a path to a repo
@@ -60,6 +64,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Run a task's setup and start its agent (runs in the shell pane of a new session)
+    #[command(hide = true)]
+    Setup { task: String },
     /// Sidebar pane (runs inside task sessions)
     Sidebar,
     /// Task picker popup
@@ -82,8 +89,16 @@ pub fn main() -> Result<()> {
             crate::hook::run(&event);
             Ok(())
         }
-        Cmd::Status => {
-            println!("{}", format_counts(open_store(&Config::load()?)?.counts()?));
+        Cmd::Status { tmux } => {
+            let c = open_store(&Config::load()?)?.counts()?;
+            println!(
+                "{}",
+                if tmux {
+                    format_counts_tmux(c)
+                } else {
+                    format_counts(c)
+                }
+            );
             Ok(())
         }
         Cmd::Init { dry_run, roots } => crate::init::run(dry_run, roots),
@@ -98,7 +113,7 @@ pub fn main() -> Result<()> {
 
 fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
     match cmd {
-        Cmd::Hook { .. } | Cmd::Status | Cmd::Init { .. } => unreachable!(),
+        Cmd::Hook { .. } | Cmd::Status { .. } | Cmd::Init { .. } => unreachable!(),
         Cmd::New {
             repo,
             slug,
@@ -182,7 +197,7 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
         Cmd::Next => {
             let current = mux.current_session();
             match store.rotation(current.as_deref())?.into_iter().next() {
-                Some(t) => mux.switch_to(&t.session),
+                Some(t) => go_to(mux, &t),
                 None => {
                     mux.message("grove: nothing needs you");
                     Ok(())
@@ -195,9 +210,22 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Setup { task } => crate::task::run_setup(config, store, mux, &task),
         Cmd::Sidebar => crate::sidebar::run(config, false),
         Cmd::Dash => crate::sidebar::run(config, true),
     }
+}
+
+/// Switch to a task, landing in the agent pane if it is waiting for you
+/// and in the shell otherwise.
+fn go_to(mux: &Tmux, t: &crate::store::Task) -> Result<()> {
+    let role = if t.state == crate::store::State::Waiting {
+        Role::Agent
+    } else {
+        Role::Shell
+    };
+    let _ = mux.focus(&t.session, role);
+    mux.switch_to(&t.session)
 }
 
 fn find_task(store: &Store, task: &str) -> Result<Option<crate::store::Task>> {
@@ -225,6 +253,29 @@ pub fn format_counts(c: Counts) -> String {
     }
     if c.done_unseen > 0 {
         parts.push(format!("✓{}", c.done_unseen));
+    }
+    parts.join(" ")
+}
+
+/// The counter with tmux style tags, in the simulator's colours.
+pub fn format_counts_tmux(c: Counts) -> String {
+    let mut parts = vec![];
+    if c.waiting > 0 {
+        parts.push(format!(
+            "#[fg={},bold]⏳{}#[default]",
+            crate::theme::WAIT,
+            c.waiting
+        ));
+    }
+    if c.working > 0 {
+        parts.push(format!("#[fg={}]●{}#[default]", crate::theme::WORK, c.working));
+    }
+    if c.done_unseen > 0 {
+        parts.push(format!(
+            "#[fg={},bold]✓{}#[default]",
+            crate::theme::DONE,
+            c.done_unseen
+        ));
     }
     parts.join(" ")
 }

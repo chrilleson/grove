@@ -39,3 +39,12 @@ pub fn expand(p: &str) -> PathBuf {
         None => PathBuf::from(p),
     }
 }
+
+/// Show a path with the home directory as `~`.
+pub fn tilde(p: &std::path::Path) -> String {
+    let home = home();
+    match p.strip_prefix(&home) {
+        Ok(rest) if home != std::path::Path::new("/") => format!("~/{}", rest.display()),
+        _ => p.display().to_string(),
+    }
+}

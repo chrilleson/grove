@@ -107,34 +107,46 @@ Each task gets the lowest free block of 10 ports starting at `ports.start`. `GRO
 
 ## Session layout
 
+The design reference is the grove simulator (claude.ai artifact "grove simulator", sidebar variant). Colours come from its palette (`src/theme.rs`): waiting `#f0b03f`, working `#6fb3ff`, done `#7fd492`, idle `#5d6877`.
+
 ```
-┌─────────┬──────────────────────┬──────────────┐
-│ sidebar │ claude               │ shell        │
-│ (fixed) │                      │ (worktree)   │
-└─────────┴──────────────────────┴──────────────┘
+┌─ grove ───────┬─ claude · portal/fix-login · ⏳ needs input ─┬─ zsh · ~/…/fix-login ─┐
+│ sidebar       │ agent                                        │ shell (worktree)      │
+│ (32 cols)     │                                              │                       │
+└───────────────┴──────────────────────────────────────────────┴───────────────────────┘
 ```
 
-Environment on the session: `GROVE_TASK=<id>`, `GROVE_PORT`, mapped port vars, and for team tasks `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Claude starts as `claude` (team: `claude --teammate-mode tmux`), optionally with the brief as the first prompt.
+- Agent and shell split the space after the sidebar 50/50 (`shell_percent`).
+- Every pane has a header (`pane-border-status top`). Panes carry `@grove_role` and `@grove_title`; the agent header also shows `@grove_state`, which the hook updates on each state change. The focused pane's border is blue.
+- The session is created at the real client size and a `window-resized` hook keeps the sidebar at its width.
+- Environment on the session: `GROVE_TASK=<id>`, `GROVE_PORT`, mapped port vars, and for team tasks `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+- The session opens immediately. The shell pane first runs `grove setup <id>`, which prints `grove:` progress lines and the setup output, then starts the agent in the agent pane and becomes the user's shell.
+- A brief is written to `.grove/brief.md` in the worktree (hidden via the repo's `info/exclude`) and the agent starts as `claude "Read .grove/brief.md and start."` (team: `claude --teammate-mode tmux …`).
+- `⌥w`, `⌥1–9` and the sidebar land in the agent pane when the task is waiting, otherwise in the shell.
 
 ## Sidebar
 
-`grove sidebar` runs in the left pane of every task session. It polls the database (every 500 ms, cheap: one indexed query) and renders one row per task:
+`grove sidebar` runs in the left pane of every task session. It polls the database every 500 ms and renders two lines per task:
 
 ```
-1 ⏳ api/fix-login     3m  +42 −7
-2 ⚙ web/new-nav      12m  +210 −88
-3 ✓ cli/docs          1h  “Updated README with…”
+ tasks · 3
+ 1 ⏳ portal/fix-login-redirect
+    needs input · 3m · +42 −7
+ 2 ● api/rate-limit-webhooks
+    working · 40m · +118 −3
+ 3 ✓ dotfiles/zsh-linux
+    done, not seen · 1h · Added zsh config…
 ```
 
-- Icons: `⏳` waiting, `⚙` working, `✓` done-unseen (bold), `·` done-seen, `○` idle.
-- The current task is highlighted.
-- When there is no diff, the info line replaces `+/−`.
-- Waiting rows blink after `blink_after`.
-- Fixed width (32 columns) in v1.
+- Icons: `⏳` waiting, `●` working, `✓` done, `○` idle, in the state colour.
+- Waiting rows are amber and bold, done-unseen rows green and bold, the rest dim; the current task gets a background bar.
+- The second line is state words, age, then `+/−` if there is a diff, else the agent's last message, then `team` for team tasks.
+- Waiting icons blink after `blink_after`.
+- Footer: `⌥w next · ⌥s all · q hide`. `q` closes only the sidebar pane.
 
 ## Status line
 
-`grove status` prints a compact counter for the tmux status line, e.g. `⏳2 ✓1`, from the database in under 5 ms. At most every 2 minutes it also spawns a detached `grove refresh` that updates diff stats and PR status.
+`grove status` prints a compact counter for the tmux status line, e.g. `⏳2 ●3 ✓1` (`--tmux` adds the palette colours), from the database in under 5 ms. At most every 2 minutes it also spawns a detached `grove refresh` that updates diff stats and PR status.
 
 ## States and attention
 
@@ -187,7 +199,8 @@ grove binds only `M-…` keys in tmux's root table. Making ⌥ send Alt is the t
 | `grove status` | Status-line counter |
 | `grove refresh` | Update diff stats and PR status |
 | `grove dash` | Dashboard TUI |
-| `grove rm <id> [--force]` | Teardown; refuses dirty/unpushed unless `--force` |
+| `grove rm [id] [--force]` | Teardown (`⌥g x`); refuses uncommitted changes or commits on no other branch/remote unless `--force` |
+| `grove setup <id>` | Internal: runs setup in the shell pane, then starts the agent |
 | `grove init [--dry-run]` | Interactive setup |
 | `grove doctor` | Check tmux, terminal Alt handling, hooks, gh |
 

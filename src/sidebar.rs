@@ -1,42 +1,57 @@
 //! `grove sidebar`: the left pane of every task session (ADR 4), and the
 //! `⌥s` picker (`grove dash`), which is the same view in a popup.
 //!
-//! Each task is a small card:
+//! Two lines per task, as in the design simulator:
 //!
 //! ```text
-//! ▌1 ✓ fix-login              1m
-//!      .dotfiles · +42 −7
-//!      I couldn't find any login
-//!      or session-cookie code…
+//!  1 ⏳ portal/fix-login-redirect
+//!     needs input · 3m · +42 −7
 //! ```
 //!
-//! Icons are all single-width so columns line up in every terminal, and
-//! colours are the terminal's own ANSI palette so the sidebar follows the
-//! user's theme.
+//! Waiting rows are amber, done-but-unseen rows green, everything else
+//! quiet; the current task gets a subtle background bar.
 
 use crate::config::Config;
 use crate::mux::{Mux, Tmux};
 use crate::store::{State, Task};
+use crate::theme;
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Columns before the slug: marker, number, space, icon, space.
-const INDENT: usize = 5;
-const INFO_LINES: usize = 2;
+const INDENT: &str = "    ";
 
-pub fn icon(t: &Task) -> (&'static str, Color) {
+pub fn icon(t: &Task) -> &'static str {
     match t.state {
-        State::Waiting => ("●", Color::Yellow),
-        State::Working => ("◐", Color::Blue),
-        State::Done if !t.seen => ("✓", Color::Green),
-        State::Done => ("✓", Color::DarkGray),
-        State::Idle => ("○", Color::DarkGray),
+        State::Waiting => "⏳",
+        State::Working => "●",
+        State::Done => "✓",
+        State::Idle => "○",
+    }
+}
+
+pub fn state_color(t: &Task) -> &'static str {
+    match t.state {
+        State::Waiting => theme::WAIT,
+        State::Working => theme::WORK,
+        State::Done => theme::DONE,
+        State::Idle => theme::IDLE,
+    }
+}
+
+/// How the second line describes the state.
+pub fn state_words(t: &Task) -> &'static str {
+    match t.state {
+        State::Waiting => "needs input",
+        State::Working => "working",
+        State::Done if !t.seen => "done, not seen",
+        State::Done => "done",
+        State::Idle => "idle",
     }
 }
 
@@ -51,7 +66,7 @@ pub fn age(secs: i64) -> String {
 }
 
 /// Cut `s` to at most `max` display columns, ending in `…` when cut.
-fn truncate(s: &str, max: usize) -> String {
+pub fn truncate(s: &str, max: usize) -> String {
     if s.width() <= max {
         return s.to_string();
     }
@@ -69,75 +84,23 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-/// Greedy word wrap to `width` columns; words longer than a line are cut.
-fn wrap(s: &str, width: usize) -> Vec<String> {
-    let mut lines = vec![];
-    let mut cur = String::new();
-    for word in s.split_whitespace() {
-        let candidate = if cur.is_empty() {
-            word.to_string()
-        } else {
-            format!("{cur} {word}")
-        };
-        if candidate.width() <= width {
-            cur = candidate;
-        } else {
-            if !cur.is_empty() {
-                lines.push(std::mem::take(&mut cur));
+/// The two plain-text lines for one task, each at most `width` columns.
+pub fn task_lines(t: &Task, now: i64, width: usize) -> [String; 2] {
+    let top = truncate(&format!(" {} {} {}", t.number, icon(t), t.id), width);
+    let mut parts = vec![state_words(t).to_string(), age(now - t.state_since)];
+    match (t.diff_added, t.diff_removed) {
+        (Some(a), Some(r)) if a + r > 0 => parts.push(format!("+{a} −{r}")),
+        _ => {
+            if let Some(info) = t.info.as_deref().filter(|i| !i.trim().is_empty()) {
+                parts.push(info.to_string());
             }
-            cur = truncate(word, width);
         }
     }
-    if !cur.is_empty() {
-        lines.push(cur);
+    if t.team {
+        parts.push("team".into());
     }
-    lines
-}
-
-/// At most `INFO_LINES` wrapped lines, the last ending in `…` if text was dropped.
-fn info_lines(info: &str, width: usize) -> Vec<String> {
-    let all = wrap(info, width);
-    if all.len() <= INFO_LINES {
-        return all;
-    }
-    let mut out: Vec<String> = all[..INFO_LINES - 1].to_vec();
-    let rest = all[INFO_LINES - 1..].join(" ");
-    let mut last = wrap(&rest, width.saturating_sub(1))
-        .into_iter()
-        .next()
-        .unwrap_or_default();
-    last.push('…');
-    out.push(last);
-    out
-}
-
-/// The plain-text lines of one task card, each at most `width` columns.
-pub fn task_lines(t: &Task, now: i64, width: usize, current: bool) -> Vec<String> {
-    let (ic, _) = icon(t);
-    let marker = if current { "▌" } else { " " };
-    let age = age(now - t.state_since);
-    let slug_w = width.saturating_sub(INDENT + 1 + age.width());
-    let slug = truncate(&t.slug, slug_w);
-    let pad = " ".repeat(slug_w - slug.width());
-    let mut lines = vec![format!("{marker}{} {ic} {slug}{pad} {age}", t.number)];
-
-    let indent = " ".repeat(INDENT);
-    let body_w = width.saturating_sub(INDENT);
-    let mut repo = t.repo.clone();
-    if let (Some(a), Some(r)) = (t.diff_added, t.diff_removed)
-        && a + r > 0
-    {
-        repo = format!("{repo} · +{a} −{r}");
-    }
-    lines.push(format!("{indent}{}", truncate(&repo, body_w)));
-    if let Some(info) = t.info.as_deref().filter(|i| !i.trim().is_empty()) {
-        lines.extend(
-            info_lines(info, body_w)
-                .into_iter()
-                .map(|l| format!("{indent}{l}")),
-        );
-    }
-    lines
+    let sub = truncate(&format!("{INDENT}{}", parts.join(" · ")), width);
+    [top, sub]
 }
 
 pub fn parse_duration(s: &str) -> Option<i64> {
@@ -160,80 +123,69 @@ struct View<'a> {
     blink_after: i64,
 }
 
-fn card(t: &Task, v: &View, i: usize, width: usize) -> Vec<Line<'static>> {
-    let is_current = v.current == Some(t.id.as_str());
-    let is_selected = v.selected == Some(i);
-    let lines = task_lines(t, v.now, width, is_current || is_selected);
-    let (ic, color) = icon(t);
-    let needs_you = t.needs_you();
-    let dim = Style::default().fg(Color::DarkGray);
+fn pad(s: String, width: usize) -> String {
+    let w = s.width();
+    if w >= width { s } else { s + &" ".repeat(width - w) }
+}
 
-    let mut out = vec![];
-    // Title line, split so the icon and marker get their own colours.
-    let title = &lines[0];
-    let (marker, rest) = title.split_at(title.chars().next().map_or(0, char::len_utf8));
-    let after_icon = rest.split_once(ic).map_or("", |(_, r)| r);
+fn row(t: &Task, v: &View, i: usize, width: usize) -> Vec<Line<'static>> {
+    let highlighted = v.current == Some(t.id.as_str()) || v.selected == Some(i);
+    let [top, sub] = task_lines(t, v.now, width);
+    let color = theme::color(state_color(t));
+
+    let mut title = Style::default().fg(theme::color(theme::DIM));
     let mut icon_style = Style::default().fg(color);
-    if t.state == State::Waiting && v.now - t.state_since >= v.blink_after {
-        icon_style = icon_style.add_modifier(Modifier::SLOW_BLINK | Modifier::BOLD);
+    match t.state {
+        State::Waiting => {
+            title = Style::default().fg(color).add_modifier(Modifier::BOLD);
+            if v.now - t.state_since >= v.blink_after {
+                icon_style = icon_style.add_modifier(Modifier::SLOW_BLINK);
+            }
+        }
+        State::Done if !t.seen => title = Style::default().fg(color).add_modifier(Modifier::BOLD),
+        _ if highlighted => title = Style::default().fg(theme::color(theme::FG)),
+        _ => {}
     }
-    let mut title_style = Style::default();
-    if needs_you || is_current || is_selected {
-        title_style = title_style.add_modifier(Modifier::BOLD);
+    let mut small = Style::default().fg(theme::color(theme::FAINT));
+    let mut num = Style::default().fg(theme::color(theme::FAINT));
+    if highlighted {
+        let bg = theme::color(theme::CURRENT_BG);
+        title = title.bg(bg);
+        icon_style = icon_style.bg(bg);
+        small = small.bg(bg).fg(theme::color(theme::DIM));
+        num = num.bg(bg);
     }
-    if !needs_you && !is_current && !is_selected {
-        title_style = title_style.fg(Color::Gray);
-    }
-    out.push(Line::from(vec![
-        Span::styled(marker.to_string(), Style::default().fg(Color::Cyan)),
-        Span::styled(format!("{} ", t.number), dim),
-        Span::styled(ic.to_string(), icon_style),
-        Span::styled(after_icon.to_string(), title_style),
-    ]));
-    out.extend(lines[1..].iter().map(|l| Line::styled(l.clone(), dim)));
-    out
+
+    // Split " 1 ⏳ repo/slug" so number, icon and id get their own styles.
+    let ic = icon(t);
+    let (before, after) = top.split_once(ic).unwrap_or((&top, ""));
+    let used = top.width();
+    let fill = " ".repeat(width.saturating_sub(used));
+    vec![
+        Line::from(vec![
+            Span::styled(before.to_string(), num),
+            Span::styled(ic.to_string(), icon_style),
+            Span::styled(format!("{after}{fill}"), title),
+        ]),
+        Line::styled(pad(sub, width), small),
+    ]
 }
 
 fn render(v: &View, width: usize) -> (Text<'static>, Line<'static>) {
-    let dim = Style::default().fg(Color::DarkGray);
-    let waiting = v.tasks.iter().filter(|t| t.state == State::Waiting).count();
-    let done = v
-        .tasks
-        .iter()
-        .filter(|t| t.state == State::Done && !t.seen)
-        .count();
-
-    let mut header = vec![Span::styled(
-        " grove",
-        Style::default().add_modifier(Modifier::BOLD),
-    )];
-    if waiting > 0 {
-        header.push(Span::styled(
-            format!("  ● {waiting}"),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    if done > 0 {
-        header.push(Span::styled(
-            format!("  ✓ {done}"),
-            Style::default().fg(Color::Green),
-        ));
-    }
-    let mut lines = vec![Line::from(header), Line::raw("")];
-
+    let faint = Style::default().fg(theme::color(theme::FAINT));
+    let mut lines = vec![Line::styled(format!(" tasks · {}", v.tasks.len()), faint)];
     for (i, t) in v.tasks.iter().enumerate() {
-        lines.extend(card(t, v, i, width));
-        lines.push(Line::raw(""));
+        lines.extend(row(t, v, i, width));
     }
     if v.tasks.is_empty() {
-        lines.push(Line::styled(" no tasks — ⌥n to start one", dim));
+        lines.push(Line::styled(" no tasks · ⌥n starts one", faint));
     }
     let footer = if v.selected.is_some() {
         " j/k move · ⏎ open · q close"
     } else {
-        " ⌥w next · ⌥s tasks · q hide"
+        " ⌥w next · ⌥s all · q hide"
     };
-    (Text::from(lines), Line::styled(truncate(footer, width), dim))
+    (Text::from(lines), Line::styled(truncate(footer, width), faint))
 }
 
 /// The sidebar pane, or with `popup` the `⌥s` picker: j/k/Enter, digits,

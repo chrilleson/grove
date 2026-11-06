@@ -1,6 +1,7 @@
 //! The pane engine. tmux is the only implementation; the trait keeps tmux
 //! details in one place and lets other muxes slot in later.
 
+use crate::theme;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -13,16 +14,39 @@ pub struct SessionSpec {
     pub sidebar_cmd: String,
     pub sidebar_width: u16,
     pub shell_percent: u8,
-    /// Typed into the middle pane's shell, so the pane survives the agent exiting.
-    pub agent_cmd: String,
-    /// Extra environment for the agent pane only (e.g. `GROVE_BRIEF`).
-    pub agent_env: Vec<(String, String)>,
+    /// Header text above the agent and shell panes.
+    pub agent_title: String,
+    pub shell_title: String,
+    /// Runs in the shell pane before handing it to the user's shell (setup).
+    pub shell_first: Option<String>,
+}
+
+/// What a pane in a task session is for; stored on the pane as `@grove_role`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Sidebar,
+    Agent,
+    Shell,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Sidebar => "sidebar",
+            Role::Agent => "agent",
+            Role::Shell => "shell",
+        }
+    }
 }
 
 pub trait Mux {
     fn session_exists(&self, name: &str) -> bool;
     fn create_task_session(&self, spec: &SessionSpec) -> Result<()>;
     fn kill_session(&self, name: &str) -> Result<()>;
+    /// Type a command into a pane's shell and press Enter.
+    fn type_into(&self, session: &str, role: Role, command: &str) -> Result<()>;
+    /// Focus a pane by role.
+    fn focus(&self, session: &str, role: Role) -> Result<()>;
     /// Sessions that some client is currently looking at.
     fn viewed_sessions(&self) -> Vec<String>;
     /// The session of the client that invoked us, when run inside tmux.
@@ -51,6 +75,8 @@ impl Tmux {
 
     fn cmd(&self) -> Command {
         let mut c = Command::new("tmux");
+        // -u: values like "·" and "⏳" must survive even without a UTF-8 locale.
+        c.arg("-u");
         if let Some(s) = &self.socket {
             c.args(["-L", s]);
         }
@@ -72,6 +98,29 @@ impl Tmux {
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    }
+
+    fn pane(&self, session: &str, role: Role) -> Result<String> {
+        let out = self.run(&[
+            "list-panes",
+            "-s",
+            "-t",
+            &exact(session),
+            "-F",
+            "#{pane_id} #{@grove_role}",
+        ])?;
+        out.lines()
+            .find_map(|l| {
+                l.split_once(' ')
+                    .filter(|(_, r)| *r == role.as_str())
+                    .map(|(id, _)| id.to_string())
+            })
+            .with_context(|| format!("no {} pane in {session}", role.as_str()))
+    }
+
+    /// Show a task's state in its agent pane header. Called only on a state change.
+    pub fn set_pane_state(&self, pane: &str, styled: &str) {
+        let _ = self.run(&["set-option", "-p", "-t", pane, "@grove_state", styled]);
     }
 
     /// Size of the client we're called from, else this terminal, else a big default.
@@ -114,9 +163,7 @@ impl Mux for Tmux {
         }
         args.extend(["-P", "-F", "#{pane_id}", &s.sidebar_cmd]);
         let sidebar = self.run(&args)?;
-
-        let agent_env: Vec<String> = s.agent_env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        let mut args: Vec<&str> = vec![
+        let agent = self.run(&[
             "split-window",
             "-h",
             "-t",
@@ -126,31 +173,74 @@ impl Mux for Tmux {
             "-P",
             "-F",
             "#{pane_id}",
-        ];
-        for e in &agent_env {
-            args.extend(["-e", e]);
-        }
-        let agent = self.run(&args)?;
+        ])?;
+
         let shell_size = format!("{}%", s.shell_percent.clamp(10, 90));
-        self.run(&["split-window", "-h", "-t", &agent, "-l", &shell_size, "-c", &cwd])?;
+        let mut args = vec![
+            "split-window",
+            "-h",
+            "-d",
+            "-t",
+            &agent,
+            "-l",
+            &shell_size,
+            "-c",
+            &cwd,
+        ];
+        args.extend(["-P", "-F", "#{pane_id}"]);
+        let shell = self.run(&args)?;
+
+        for (pane, role, title) in [
+            (&sidebar, Role::Sidebar, "grove"),
+            (&agent, Role::Agent, s.agent_title.as_str()),
+            (&shell, Role::Shell, s.shell_title.as_str()),
+        ] {
+            self.run(&["set-option", "-p", "-t", pane, "@grove_role", role.as_str()])?;
+            self.run(&["set-option", "-p", "-t", pane, "@grove_title", title])?;
+        }
+
+        // Setup output streams in the shell pane, then it becomes the user's
+        // shell. Started only now, so it can find the other panes by role.
+        if let Some(cmd) = &s.shell_first {
+            let cmd = format!("{cmd}; exec \"$SHELL\"");
+            self.run(&["respawn-pane", "-k", "-t", &shell, "-c", &cwd, &cmd])?;
+        }
+
+        let win = format!("{}:", exact(&s.name));
+        let header = format!(
+            "#{{?pane_active,#[fg={dim}],#[fg={faint}]}} #{{@grove_title}}#{{?#{{@grove_state}}, · #{{@grove_state}},}} ",
+            dim = theme::DIM,
+            faint = theme::FAINT
+        );
+        for (opt, val) in [
+            ("pane-border-status", "top".to_string()),
+            ("pane-border-lines", "single".to_string()),
+            ("pane-border-style", format!("fg={}", theme::LINE)),
+            ("pane-active-border-style", format!("fg={}", theme::WORK)),
+            ("pane-border-format", header),
+        ] {
+            self.run(&["set-option", "-w", "-t", &win, opt, &val])?;
+        }
 
         let width = s.sidebar_width.to_string();
         self.run(&["resize-pane", "-t", &sidebar, "-x", &width])?;
         // Keep the sidebar fixed when the terminal or another client resizes the window.
         let keep = format!("resize-pane -t {sidebar} -x {width}");
-        self.run(&[
-            "set-hook",
-            "-w",
-            "-t",
-            &format!("{}:", exact(&s.name)),
-            "window-resized",
-            &keep,
-        ])?;
-
-        self.run(&["send-keys", "-t", &agent, "-l", &s.agent_cmd])?;
-        self.run(&["send-keys", "-t", &agent, "Enter"])?;
-        self.run(&["select-pane", "-t", &agent])?;
+        self.run(&["set-hook", "-w", "-t", &win, "window-resized", &keep])?;
+        self.run(&["select-pane", "-t", &shell])?;
         Ok(())
+    }
+
+    fn type_into(&self, session: &str, role: Role, command: &str) -> Result<()> {
+        let pane = self.pane(session, role)?;
+        self.run(&["send-keys", "-t", &pane, "-l", command])?;
+        self.run(&["send-keys", "-t", &pane, "Enter"])?;
+        Ok(())
+    }
+
+    fn focus(&self, session: &str, role: Role) -> Result<()> {
+        let pane = self.pane(session, role)?;
+        self.run(&["select-pane", "-t", &pane]).map(|_| ())
     }
 
     fn kill_session(&self, name: &str) -> Result<()> {
