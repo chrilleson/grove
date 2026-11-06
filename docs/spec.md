@@ -193,7 +193,7 @@ grove binds only `M-…` keys in tmux's root table. Making ⌥ send Alt is the t
 
 ## `grove init`
 
-Interactive. Asks for roots, writes `~/.config/grove/config.toml`, writes `~/.config/grove/grove.tmux.conf` (key bindings, status counter, session hook) and tells you the one `source-file` line to add. Adds a marked block (`"grove": true` on each entry) to `~/.claude/settings.json` hooks; re-running replaces only grove's entries. Never rewrites your own files beyond that marked block. `--dry-run` prints every change.
+Interactive. Asks for roots, writes `~/.config/grove/config.toml`, writes `~/.config/grove/grove.tmux.conf` (key bindings, status counter, session hook) and tells you the one `source-file` line to add. Adds hook entries to `~/.claude/settings.json`; grove's entries are recognised by their command (`<grove path> hook <Event>`), so re-running replaces only those and leaves the user's own hooks alone. (No custom marker key, so Claude Code's settings validation never sees an unknown field.) Never rewrites your own files beyond that marked block. `--dry-run` prints every change.
 
 ## Forges
 
