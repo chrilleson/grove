@@ -26,8 +26,7 @@ pub struct Repo {
 pub fn find_repo(config: &Config, name: &str) -> Result<Repo> {
     let as_path = Path::new(name);
     if name.contains('/') || name == "." {
-        let dir =
-            std::fs::canonicalize(as_path).with_context(|| format!("no such directory: {name}"))?;
+        let dir = std::fs::canonicalize(as_path).with_context(|| format!("no such directory: {name}"))?;
         if !dir.join(".git").exists() {
             bail!("{} is not a git repository root", dir.display());
         }
@@ -210,8 +209,87 @@ pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) ->
         env,
         sidebar_cmd: format!("'{exe}' sidebar"),
         sidebar_width: config.sidebar_width,
+        shell_percent: config.shell_percent,
         agent_cmd,
         agent_env,
     })?;
     Ok(store.get(&task.id)?.expect("exists"))
+}
+
+/// Why a task's worktree can't be removed without losing work.
+pub fn unsaved_work(worktree: &Path, branch: &str) -> Result<Option<String>> {
+    if !worktree.exists() {
+        return Ok(None);
+    }
+    let dirty = git(worktree, &["status", "--porcelain"])?;
+    if !dirty.is_empty() {
+        let n = dirty.lines().count();
+        return Ok(Some(format!(
+            "{n} uncommitted change{}",
+            if n == 1 { "" } else { "s" }
+        )));
+    }
+    // Commits reachable only from this task's branch: on no other branch and no remote.
+    // --exclude patterns for --branches are written without the refs/heads/ prefix.
+    let exclude = format!("--exclude={branch}");
+    let only_here = git(
+        worktree,
+        &[
+            "rev-list",
+            "--count",
+            "HEAD",
+            "--not",
+            &exclude,
+            "--branches",
+            "--remotes",
+        ],
+    )?;
+    let n: usize = only_here.parse().unwrap_or(0);
+    if n > 0 {
+        return Ok(Some(format!(
+            "{n} commit{} not pushed or merged anywhere",
+            if n == 1 { "" } else { "s" }
+        )));
+    }
+    Ok(None)
+}
+
+/// Teardown: refuses unsaved work unless `force`. The session is killed
+/// last because `grove rm` is often run from inside it.
+pub fn remove_task(store: &Store, mux: &dyn Mux, task: &Task, force: bool) -> Result<()> {
+    let wt = PathBuf::from(&task.worktree);
+    let repo = PathBuf::from(&task.root).join(&task.repo);
+    if !force && let Some(why) = unsaved_work(&wt, &task.branch)? {
+        bail!(
+            "{} has {why}; commit and push it, or use --force to discard",
+            task.id
+        );
+    }
+
+    let rc = RepoConfig::load(&task.repo, &repo).unwrap_or_default();
+    for cmd in &rc.teardown.run {
+        eprintln!("grove: teardown: {cmd}");
+        let _ = Command::new("sh")
+            .args(["-c", cmd])
+            .current_dir(&wt)
+            .envs(rc.port_env(task.port_base))
+            .status();
+    }
+
+    if wt.exists() {
+        let wt_s = wt.to_string_lossy();
+        let mut args = vec!["worktree", "remove", &*wt_s];
+        if force {
+            args.push("--force");
+        }
+        git(&repo, &args)?;
+    }
+    let _ = git(&repo, &["worktree", "prune"]);
+    let delete = if force { "-D" } else { "-d" };
+    if let Err(e) = git(&repo, &["branch", delete, &task.branch]) {
+        eprintln!("grove: kept branch {}: {e}", task.branch);
+    }
+    store.remove(&task.id)?;
+    mux.kill_session(&task.session)?;
+    Ok(())
 }

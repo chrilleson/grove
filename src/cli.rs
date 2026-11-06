@@ -53,6 +53,13 @@ enum Cmd {
     Next,
     /// Mark the task in a session seen (called by the tmux session hook)
     Visit { session: Option<String> },
+    /// Remove a task: session, worktree and branch. Refuses unsaved work unless --force
+    Rm {
+        /// Number or id; defaults to the task you're in
+        task: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
     /// Sidebar pane (runs inside task sessions)
     Sidebar,
     /// Task picker popup
@@ -147,19 +154,31 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Go { task } => {
-            let t = match task.parse::<i64>() {
-                Ok(n) => store.by_number(n)?,
-                Err(_) => store.get(&task)?,
+        Cmd::Rm { task, force } => {
+            let t = match task {
+                Some(task) => find_task(store, &task)?,
+                None => match std::env::var("GROVE_TASK").ok() {
+                    Some(id) => store.get(&id)?,
+                    None => match mux.current_session() {
+                        Some(s) => store.by_session(&s)?,
+                        None => None,
+                    },
+                },
             };
-            match t {
-                Some(t) => mux.switch_to(&t.session),
-                None => {
-                    mux.message(&format!("grove: no task {task}"));
-                    Ok(())
-                }
-            }
+            let Some(t) = t else {
+                anyhow::bail!("no such task (give a number or id)")
+            };
+            crate::task::remove_task(store, mux, &t, force)?;
+            eprintln!("grove: removed {}", t.id);
+            Ok(())
         }
+        Cmd::Go { task } => match find_task(store, &task)? {
+            Some(t) => mux.switch_to(&t.session),
+            None => {
+                mux.message(&format!("grove: no task {task}"));
+                Ok(())
+            }
+        },
         Cmd::Next => {
             let current = mux.current_session();
             match store.rotation(current.as_deref())?.into_iter().next() {
@@ -181,6 +200,13 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
     }
 }
 
+fn find_task(store: &Store, task: &str) -> Result<Option<crate::store::Task>> {
+    match task.parse::<i64>() {
+        Ok(n) => store.by_number(n),
+        Err(_) => store.get(task),
+    }
+}
+
 fn state_label(t: &crate::store::Task) -> &'static str {
     match t.state {
         crate::store::State::Done if !t.seen => "done*",
@@ -189,11 +215,7 @@ fn state_label(t: &crate::store::Task) -> &'static str {
 }
 
 pub fn open_store(config: &Config) -> Result<Store> {
-    Store::open(
-        &crate::paths::state_db(),
-        config.ports.start,
-        config.ports.block,
-    )
+    Store::open(&crate::paths::state_db(), config.ports.start, config.ports.block)
 }
 
 pub fn format_counts(c: Counts) -> String {

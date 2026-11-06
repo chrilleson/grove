@@ -19,6 +19,10 @@ fn new_tasks_get_lowest_free_number_and_port_block() {
     assert_eq!((b.number, b.port_base), (2, 20010));
     assert_eq!(a.id, "api/a");
     assert_eq!(a.session, "api-a");
+    assert_eq!(
+        grove::store::session_name(".dotfiles", "fix.login"),
+        "dotfiles-fix_login"
+    );
     assert_eq!(a.state, State::Idle);
 
     s.remove("api/a").unwrap();
@@ -38,24 +42,14 @@ fn signals_move_state_and_report_needs_you_transitions() {
     let s = Store::open_in_memory(20000, 10).unwrap();
     s.add_task(new_task("a"), 100).unwrap();
 
-    let t = s
-        .apply("api/a", Signal::Working, 110, false)
-        .unwrap()
-        .unwrap();
+    let t = s.apply("api/a", Signal::Working, 110, false).unwrap().unwrap();
     assert_eq!(t.to, State::Working);
     assert!(!t.newly_needs_you);
 
     // same state again: no transition, nothing written
-    assert!(
-        s.apply("api/a", Signal::Working, 111, false)
-            .unwrap()
-            .is_none()
-    );
+    assert!(s.apply("api/a", Signal::Working, 111, false).unwrap().is_none());
 
-    let t = s
-        .apply("api/a", Signal::Waiting, 120, false)
-        .unwrap()
-        .unwrap();
+    let t = s.apply("api/a", Signal::Waiting, 120, false).unwrap().unwrap();
     assert!(t.newly_needs_you);
 
     let t = s
@@ -93,8 +87,7 @@ fn done_while_viewed_is_born_seen() {
 fn visiting_marks_done_seen() {
     let s = Store::open_in_memory(20000, 10).unwrap();
     s.add_task(new_task("a"), 100).unwrap();
-    s.apply("api/a", Signal::Done { info: None }, 130, false)
-        .unwrap();
+    s.apply("api/a", Signal::Done { info: None }, 130, false).unwrap();
     s.visit_session("api-a", 140).unwrap();
     let task = s.get("api/a").unwrap().unwrap();
     assert!(task.seen);
@@ -107,20 +100,13 @@ fn rotation_is_waiting_then_unseen_done_oldest_first_skipping_current() {
     for slug in ["a", "b", "c", "d", "e"] {
         s.add_task(new_task(slug), 100).unwrap();
     }
-    s.apply("api/a", Signal::Done { info: None }, 150, false)
-        .unwrap();
+    s.apply("api/a", Signal::Done { info: None }, 150, false).unwrap();
     s.apply("api/b", Signal::Waiting, 170, false).unwrap();
-    s.apply("api/c", Signal::Done { info: None }, 140, false)
-        .unwrap();
+    s.apply("api/c", Signal::Done { info: None }, 140, false).unwrap();
     s.apply("api/d", Signal::Waiting, 160, false).unwrap();
     s.apply("api/e", Signal::Working, 100, false).unwrap();
 
-    let ids: Vec<_> = s
-        .rotation(None)
-        .unwrap()
-        .into_iter()
-        .map(|t| t.id)
-        .collect();
+    let ids: Vec<_> = s.rotation(None).unwrap().into_iter().map(|t| t.id).collect();
     assert_eq!(ids, ["api/d", "api/b", "api/c", "api/a"]);
 
     let ids: Vec<_> = s

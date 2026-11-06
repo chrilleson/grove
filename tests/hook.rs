@@ -6,19 +6,13 @@ use std::io::Write;
 
 #[test]
 fn events_map_to_signals() {
-    assert_eq!(
-        signal_for("UserPromptSubmit", &json!({})),
-        Some(Signal::Working)
-    );
+    assert_eq!(signal_for("UserPromptSubmit", &json!({})), Some(Signal::Working));
     assert_eq!(
         signal_for("PreToolUse", &json!({"tool_name": "Bash"})),
         Some(Signal::Working)
     );
     assert_eq!(
-        signal_for(
-            "Notification",
-            &json!({"notification_type": "permission_prompt"})
-        ),
+        signal_for("Notification", &json!({"notification_type": "permission_prompt"})),
         Some(Signal::Waiting)
     );
     assert_eq!(
@@ -26,16 +20,10 @@ fn events_map_to_signals() {
         Some(Signal::Waiting)
     );
     assert_eq!(
-        signal_for(
-            "Notification",
-            &json!({"notification_type": "auth_success"})
-        ),
+        signal_for("Notification", &json!({"notification_type": "auth_success"})),
         None
     );
-    assert_eq!(
-        signal_for("PermissionRequest", &json!({})),
-        Some(Signal::Waiting)
-    );
+    assert_eq!(signal_for("PermissionRequest", &json!({})), Some(Signal::Waiting));
     assert_eq!(signal_for("SessionEnd", &json!({})), Some(Signal::Idle));
     assert_eq!(signal_for("SubagentStart", &json!({"agent_id": "x"})), None);
     assert_eq!(signal_for("SubagentStop", &json!({"agent_id": "x"})), None);
@@ -64,7 +52,11 @@ fn stop_falls_back_to_transcript() {
         r#"{{"type":"user","message":{{"role":"user","content":"hi"}}}}"#
     )
     .unwrap();
-    writeln!(f, r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"First answer"}}]}}}}"#).unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"First answer"}}]}}}}"#
+    )
+    .unwrap();
     writeln!(f, r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"Bash"}},{{"type":"text","text":"Updated README"}}]}}}}"#).unwrap();
     let sig = signal_for("Stop", &json!({"transcript_path": f.path()}));
     assert_eq!(
