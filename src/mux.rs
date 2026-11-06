@@ -14,6 +14,8 @@ pub struct SessionSpec {
     pub sidebar_width: u16,
     /// Typed into the middle pane's shell, so the pane survives the agent exiting.
     pub agent_cmd: String,
+    /// Extra environment for the agent pane only (e.g. `GROVE_BRIEF`).
+    pub agent_env: Vec<(String, String)>,
 }
 
 pub trait Mux {

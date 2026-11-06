@@ -50,16 +50,15 @@ fn last_message(payload: &Value) -> Option<String> {
         if v.get("type").and_then(Value::as_str) != Some("assistant") {
             continue;
         }
-        if let Some(blocks) = v.pointer("/message/content").and_then(Value::as_array) {
-            if let Some(text) = blocks
+        if let Some(blocks) = v.pointer("/message/content").and_then(Value::as_array)
+            && let Some(text) = blocks
                 .iter()
                 .rev()
                 .find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
                 .and_then(|b| b.get("text"))
                 .and_then(Value::as_str)
-            {
-                last = Some(text.to_string());
-            }
+        {
+            last = Some(text.to_string());
         }
     }
     last
@@ -127,18 +126,20 @@ fn try_run(event: &str) -> anyhow::Result<()> {
         tmux.viewed_sessions().contains(&session)
     };
 
-    if let Some(t) = store.apply(&task_id, signal, crate::now(), viewed)? {
-        if t.newly_needs_you && !viewed && crate::notify::enabled(config.notify) {
-            let what = if t.to == crate::store::State::Waiting {
-                "needs you"
-            } else {
-                "is done"
-            };
-            crate::notify::send(
-                &format!("{} {what}", t.task.id),
-                t.task.info.as_deref().unwrap_or(""),
-            );
-        }
+    if let Some(t) = store.apply(&task_id, signal, crate::now(), viewed)?
+        && t.newly_needs_you
+        && !viewed
+        && crate::notify::enabled(config.notify)
+    {
+        let what = if t.to == crate::store::State::Waiting {
+            "needs you"
+        } else {
+            "is done"
+        };
+        crate::notify::send(
+            &format!("{} {what}", t.task.id),
+            t.task.info.as_deref().unwrap_or(""),
+        );
     }
     Ok(())
 }
