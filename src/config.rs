@@ -11,6 +11,8 @@ pub struct Config {
     pub roots: Vec<String>,
     pub worktree_root: Option<String>,
     pub default_team: bool,
+    /// Prepended to the slug to make the task's branch name.
+    pub branch_prefix: String,
     pub agent_command: String,
     pub editor: String,
     pub notify: bool,
@@ -57,6 +59,7 @@ impl Default for Config {
             roots: vec![],
             worktree_root: None,
             default_team: false,
+            branch_prefix: "grove/".into(),
             agent_command: "claude".into(),
             editor: "nvim".into(),
             notify: true,

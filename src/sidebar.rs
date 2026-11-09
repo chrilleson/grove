@@ -55,6 +55,16 @@ pub fn state_words(t: &Task) -> &'static str {
     }
 }
 
+/// The agent pane header's right-hand text, e.g. `⏳ waiting`, in tmux style tags.
+pub fn pane_state(t: &Task) -> String {
+    format!(
+        "#[fg={}]{} {}#[default]",
+        state_color(t),
+        icon(t),
+        t.state.as_str()
+    )
+}
+
 pub fn age(secs: i64) -> String {
     let s = secs.max(0);
     match s {
@@ -173,7 +183,7 @@ fn row(t: &Task, v: &View, i: usize, width: usize) -> Vec<Line<'static>> {
 
 fn render(v: &View, width: usize) -> (Text<'static>, Line<'static>) {
     let faint = Style::default().fg(theme::color(theme::FAINT));
-    let mut lines = vec![Line::styled(format!(" tasks · {}", v.tasks.len()), faint)];
+    let mut lines = vec![];
     for (i, t) in v.tasks.iter().enumerate() {
         lines.extend(row(t, v, i, width));
     }
@@ -196,12 +206,21 @@ pub fn run(config: &Config, popup: bool) -> Result<()> {
     let current = std::env::var("GROVE_TASK").ok();
     let blink_after = parse_duration(&config.attention.blink_after).unwrap_or(120);
     let mux = Tmux::from_env();
+    // The count lives in the pane's own header row ("tasks · 7"), as in the design.
+    let own_pane = std::env::var("TMUX_PANE").ok().filter(|_| !popup);
+    let mut shown_count = None;
     let mut selected = 0usize;
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
         loop {
             let tasks = store.list()?;
             selected = selected.min(tasks.len().saturating_sub(1));
+            if let Some(pane) = &own_pane
+                && shown_count != Some(tasks.len())
+            {
+                mux.set_pane_title(pane, &format!("tasks · {}", tasks.len()));
+                shown_count = Some(tasks.len());
+            }
             let view = View {
                 tasks: &tasks,
                 current: current.as_deref(),

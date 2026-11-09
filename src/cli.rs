@@ -246,36 +246,16 @@ pub fn open_store(config: &Config) -> Result<Store> {
     Store::open(&crate::paths::state_db(), config.ports.start, config.ports.block)
 }
 
+/// The status-line counter: all three counts, always (design images 01–07).
 pub fn format_counts(c: Counts) -> String {
-    let mut parts = vec![];
-    if c.waiting > 0 {
-        parts.push(format!("⏳{}", c.waiting));
-    }
-    if c.done_unseen > 0 {
-        parts.push(format!("✓{}", c.done_unseen));
-    }
-    parts.join(" ")
+    format!("⏳{} ●{} ✓{}", c.waiting, c.working, c.done_unseen)
 }
 
-/// The counter with tmux style tags, in the simulator's colours.
+/// The counter with tmux style tags, in the design palette.
 pub fn format_counts_tmux(c: Counts) -> String {
-    let mut parts = vec![];
-    if c.waiting > 0 {
-        parts.push(format!(
-            "#[fg={},bold]⏳{}#[default]",
-            crate::theme::WAIT,
-            c.waiting
-        ));
-    }
-    if c.working > 0 {
-        parts.push(format!("#[fg={}]●{}#[default]", crate::theme::WORK, c.working));
-    }
-    if c.done_unseen > 0 {
-        parts.push(format!(
-            "#[fg={},bold]✓{}#[default]",
-            crate::theme::DONE,
-            c.done_unseen
-        ));
-    }
-    parts.join(" ")
+    use crate::theme::{DONE, WAIT, WORK};
+    format!(
+        "#[fg={WAIT}]⏳{} #[fg={WORK}]●{} #[fg={DONE}]✓{}#[default]",
+        c.waiting, c.working, c.done_unseen
+    )
 }

@@ -80,6 +80,7 @@ fn hook_binary_updates_state_and_logs_payload() {
                 slug: "a".into(),
                 worktree: "/w".into(),
                 team: false,
+                branch: None,
             },
             1,
         )
@@ -113,7 +114,17 @@ fn hook_binary_updates_state_and_logs_payload() {
         .env("XDG_CONFIG_HOME", state.path().join("cfg"))
         .assert()
         .success()
-        .stdout("⏳1\n");
+        .stdout("⏳1 ●0 ✓0\n");
+
+    // the tmux variant uses the design palette
+    Command::cargo_bin("grove")
+        .unwrap()
+        .args(["status", "--tmux"])
+        .env("XDG_STATE_HOME", state.path())
+        .env("XDG_CONFIG_HOME", state.path().join("cfg"))
+        .assert()
+        .success()
+        .stdout("#[fg=#f0b03f]⏳1 #[fg=#6fb3ff]●0 #[fg=#7fd492]✓0#[default]\n");
 
     run(
         "Stop",

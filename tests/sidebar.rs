@@ -11,6 +11,7 @@ fn task(repo: &str, slug: &str) -> (Store, String) {
             slug: slug.into(),
             worktree: "/w".into(),
             team: false,
+            branch: None,
         },
         0,
     )
