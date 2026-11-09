@@ -75,7 +75,7 @@ pub fn tmux_conf(config: &Config, exe: &str) -> String {
     c
 }
 
-fn is_grove_entry(entry: &Value) -> bool {
+pub(crate) fn is_grove_entry(entry: &Value) -> bool {
     entry["hooks"].as_array().is_some_and(|hs| {
         hs.iter().any(|h| {
             let cmd = h["command"].as_str().unwrap_or("");

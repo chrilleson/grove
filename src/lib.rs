@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 pub mod dash;
+pub mod doctor;
 pub mod hook;
 pub mod init;
 pub mod mux;

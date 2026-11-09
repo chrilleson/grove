@@ -92,6 +92,8 @@ enum Cmd {
     Setup { task: String },
     /// Sidebar pane (runs inside task sessions)
     Sidebar,
+    /// Check this machine is set up for grove and say how to fix what isn't
+    Doctor,
     /// Task picker popup
     Dash,
     /// Write config, tmux conf and Claude Code hooks
@@ -126,6 +128,12 @@ pub fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Init { dry_run, roots } => crate::init::run(dry_run, roots),
+        Cmd::Doctor => {
+            if crate::doctor::run() {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         cmd => {
             let config = Config::load()?;
             let store = open_store(&config)?;
@@ -137,7 +145,7 @@ pub fn main() -> Result<()> {
 
 fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
     match cmd {
-        Cmd::Hook { .. } | Cmd::Status { .. } | Cmd::Init { .. } => unreachable!(),
+        Cmd::Hook { .. } | Cmd::Status { .. } | Cmd::Init { .. } | Cmd::Doctor => unreachable!(),
         Cmd::New { popup: true, .. } => {
             let exe = std::env::current_exe()?.to_string_lossy().into_owned();
             let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
