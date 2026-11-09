@@ -203,8 +203,16 @@ impl Mux for Tmux {
         args.extend(["-P", "-F", "#{pane_id}"]);
         let shell = self.run(&args)?;
 
+        // The sidebar sets its own header ("tasks · 7"); setting one here would race it.
+        self.run(&[
+            "set-option",
+            "-p",
+            "-t",
+            &sidebar,
+            "@grove_role",
+            Role::Sidebar.as_str(),
+        ])?;
         for (pane, role, title) in [
-            (&sidebar, Role::Sidebar, "tasks"),
             (&agent, Role::Agent, s.agent_title.as_str()),
             (&shell, Role::Shell, s.shell_title.as_str()),
         ] {

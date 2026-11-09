@@ -121,8 +121,13 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The ref to fork from: origin's default branch, else the repo's current
+/// branch by name (never the bare word `HEAD`, which would make every later
+/// diff compare the task branch with itself).
 fn default_base(repo: &Path) -> String {
-    git(repo, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).unwrap_or_else(|_| "HEAD".into())
+    git(repo, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
+        .or_else(|_| git(repo, &["symbolic-ref", "--short", "HEAD"]))
+        .unwrap_or_else(|_| "HEAD".into())
 }
 
 pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) -> Result<Task> {

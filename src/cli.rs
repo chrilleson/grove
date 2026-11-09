@@ -34,11 +34,18 @@ enum Cmd {
         tmux: bool,
     },
     /// Create a task: worktree, setup, tmux session, agent
+    /// Create a task. Without arguments, opens the new-task dialog (⌥n)
     New {
         /// Repo name under a root, or a path to a repo
-        repo: String,
-        /// Task name; also the branch name
-        slug: String,
+        repo: Option<String>,
+        /// Task name; also the branch name (default: derived from --title)
+        slug: Option<String>,
+        /// Task title; becomes the brief, and the slug if none is given
+        #[arg(long)]
+        title: Option<String>,
+        /// Open the dialog in a tmux popup
+        #[arg(long, hide = true)]
+        popup: bool,
         /// First prompt for the agent
         #[arg(long)]
         brief: Option<String>,
@@ -131,16 +138,31 @@ pub fn main() -> Result<()> {
 fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
     match cmd {
         Cmd::Hook { .. } | Cmd::Status { .. } | Cmd::Init { .. } => unreachable!(),
+        Cmd::New { popup: true, .. } => {
+            let exe = std::env::current_exe()?.to_string_lossy().into_owned();
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            mux.popup(&home, "", &format!("'{exe}' new"))
+        }
+        Cmd::New { repo: None, .. } => crate::newtask::run(config, store),
         Cmd::New {
-            repo,
+            repo: Some(repo),
             slug,
+            title,
+            popup: _,
             brief,
             base,
             team,
             no_team,
             detach,
         } => {
-            let brief = brief.filter(|b| !b.trim().is_empty());
+            let brief = brief
+                .filter(|b| !b.trim().is_empty())
+                .or(title.as_ref().map(|t| format!("# {t}")));
+            let slug = match (slug, &title) {
+                (Some(s), _) => s,
+                (None, Some(t)) => crate::newtask::slug_from_title(t),
+                (None, None) => anyhow::bail!("give a slug or --title"),
+            };
             let team = if team {
                 Some(true)
             } else if no_team {
@@ -234,13 +256,13 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
         Cmd::Refresh => crate::task::refresh(store),
         Cmd::Setup { task } => crate::task::run_setup(config, store, mux, &task),
         Cmd::Sidebar => crate::sidebar::run(config, false),
-        Cmd::Dash => crate::sidebar::run(config, true),
+        Cmd::Dash => crate::dash::run(config, store),
     }
 }
 
 /// Switch to a task, landing in the agent pane if it is waiting for you
 /// and in the shell otherwise.
-fn go_to(mux: &Tmux, t: &crate::store::Task) -> Result<()> {
+pub fn go_to(mux: &Tmux, t: &crate::store::Task) -> Result<()> {
     let role = if t.state == crate::store::State::Waiting {
         Role::Agent
     } else {

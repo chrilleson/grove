@@ -30,9 +30,9 @@ A task is one worktree + one branch + one tmux session + one Claude Code session
 | Field | Notes |
 | --- | --- |
 | `id` | `<repo>/<slug>`, unique |
-| `repo`, `root`, `slug`, `branch` | branch defaults to slug |
+| `repo`, `root`, `slug`, `branch`, `base` | branch is `branch_prefix` + slug (default `grove/`); base is the ref it forked from (origin HEAD, else the current branch) |
 | `worktree` | absolute path |
-| `session` | tmux session name, `<repo>-<slug>` with tmux-unsafe chars replaced |
+| `session` | tmux session name: the id `<repo>/<slug>`, leading dots dropped, `.`/`:` replaced |
 | `number` | small integer, lowest free, used by `⌥1–9` |
 | `state` | `waiting` · `working` · `done` · `idle` |
 | `seen` | bool, only meaningful when `done` |
@@ -179,17 +179,19 @@ grove binds only `M-…` keys in tmux's root table. Making ⌥ send Alt is the t
 | `⌥s` | Dashboard popup | `grove dash` |
 | `⌥Tab` | Last task | `tmux switch-client -l` |
 | `⌥1–9` | Task by number | `grove go <n>` |
-| `⌥c` | lazygit popup in the worktree | `display-popup -d … lazygit` |
-| `⌥e` | Editor on the worktree | new window running `$editor` |
-| `⌥v` | VS Code on the worktree | `code <worktree>` |
-| `⌥n` | New task dialog | `grove new --interactive` (popup) |
+| `⌥c` | lazygit in a bordered popup titled `lazygit · repo → branch` (image 04) | `grove open lazygit` |
+| `⌥e` | Editor on the worktree, in the shell pane when it is at a prompt, else a new window (image 03) | `grove open editor` |
+| `⌥v` | VS Code on the worktree | `grove open code` |
+| `⌥n` | New task dialog (image 06) | `grove new` in a popup |
 | `⌥g b/p/x/r` | brief / PR / discard / rename | `grove brief`, `grove pr`, `grove rm`, `grove rename` |
 
 ## CLI
 
 | Command | Purpose |
 | --- | --- |
-| `grove new <repo> <slug> [--brief TEXT] [--team/--no-team] [--base REF]` | Create task end to end |
+| `grove new` | New-task dialog: repo filter (most recently used first), title, team toggle. The slug comes from the title, the title becomes the brief |
+| `grove new <repo> [slug] [--title T] [--brief TEXT] [--team/--no-team] [--base REF]` | Create a task end to end; slug defaults to one derived from `--title` |
+| `grove open lazygit\|editor\|code [task]` | Your tools on a task (defaults to the current one) |
 | `grove ls` | List tasks |
 | `grove go <n\|id>` | Switch to task |
 | `grove next` | Switch to next task that needs you |
@@ -197,8 +199,8 @@ grove binds only `M-…` keys in tmux's root table. Making ⌥ send Alt is the t
 | `grove hook <event>` | Claude Code hook entry point; reads JSON on stdin |
 | `grove sidebar` | Sidebar TUI |
 | `grove status` | Status-line counter |
-| `grove refresh` | Update diff stats and PR status |
-| `grove dash` | Dashboard TUI |
+| `grove refresh` | Update diff stats (started in the background by `grove status`, at most every 10 s) |
+| `grove dash` | Dashboard (image 05): icon, repo, slug, `+a −r`, push state (`⇡N` commits only on the branch; PR status later), age; sorted waiting (oldest first), done, working, idle (newest first). Keys `⏎ j/k c e v n x esc` |
 | `grove rm [id] [--force]` | Teardown (`⌥g x`); refuses uncommitted changes or commits on no other branch/remote unless `--force` |
 | `grove setup <id>` | Internal: runs setup in the shell pane, then starts the agent |
 | `grove init [--dry-run]` | Interactive setup |
