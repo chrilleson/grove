@@ -51,6 +51,8 @@ pub struct NewTask {
     pub team: bool,
     /// Defaults to the slug.
     pub branch: Option<String>,
+    /// The ref the branch was made from; diffs are measured against it.
+    pub base: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +74,7 @@ pub struct Task {
     pub diff_added: Option<i64>,
     pub diff_removed: Option<i64>,
     pub created_at: i64,
+    pub base: Option<String>,
 }
 
 impl Task {
@@ -128,12 +131,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     info TEXT,
     diff_added INTEGER,
     diff_removed INTEGER,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    base TEXT
 );
 ";
 
 const COLUMNS: &str = "id, repo, root, slug, branch, worktree, session, number, state, seen, \
-    state_since, team, port_base, info, diff_added, diff_removed, created_at";
+    state_since, team, port_base, info, diff_added, diff_removed, created_at, base";
 
 fn row_to_task(r: &Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -154,6 +158,7 @@ fn row_to_task(r: &Row) -> rusqlite::Result<Task> {
         diff_added: r.get(14)?,
         diff_removed: r.get(15)?,
         created_at: r.get(16)?,
+        base: r.get(17)?,
     })
 }
 
@@ -176,6 +181,15 @@ impl Store {
 
     fn init(conn: Connection, port_start: i64, port_block: i64) -> Result<Store> {
         conn.execute_batch(SCHEMA)?;
+        // Databases from before `base` existed.
+        let has_base: bool = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'base'",
+            [],
+            |r| r.get(0),
+        )?;
+        if !has_base {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN base TEXT")?;
+        }
         Ok(Store {
             conn,
             port_start,
@@ -192,8 +206,8 @@ impl Store {
         let port_base = self.lowest_free("port_base", self.port_start, self.port_block)?;
         self.conn.execute(
             "INSERT INTO tasks (id, repo, root, slug, branch, worktree, session, number, state, seen,
-                state_since, team, port_base, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?11, ?5, ?6, ?7, 'idle', 1, ?8, ?9, ?10, ?8)",
+                state_since, team, port_base, created_at, base)
+             VALUES (?1, ?2, ?3, ?4, ?11, ?5, ?6, ?7, 'idle', 1, ?8, ?9, ?10, ?8, ?12)",
             params![
                 id,
                 t.repo,
@@ -205,7 +219,8 @@ impl Store {
                 now,
                 t.team,
                 port_base,
-                t.branch.as_deref().unwrap_or(&t.slug)
+                t.branch.as_deref().unwrap_or(&t.slug),
+                t.base
             ],
         )?;
         Ok(self.get(&id)?.expect("just inserted"))
