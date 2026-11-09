@@ -64,6 +64,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Update cached diff stats (started in the background by `grove status`)
+    #[command(hide = true)]
+    Refresh,
     /// Run a task's setup and start its agent (runs in the shell pane of a new session)
     #[command(hide = true)]
     Setup { task: String },
@@ -91,6 +94,7 @@ pub fn main() -> Result<()> {
         }
         Cmd::Status { tmux } => {
             let c = open_store(&Config::load()?)?.counts()?;
+            maybe_spawn_refresh();
             println!(
                 "{}",
                 if tmux {
@@ -210,6 +214,7 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Refresh => crate::task::refresh(store),
         Cmd::Setup { task } => crate::task::run_setup(config, store, mux, &task),
         Cmd::Sidebar => crate::sidebar::run(config, false),
         Cmd::Dash => crate::sidebar::run(config, true),
@@ -258,4 +263,29 @@ pub fn format_counts_tmux(c: Counts) -> String {
         "#[fg={WAIT}]⏳{} #[fg={WORK}]●{} #[fg={DONE}]✓{}#[default]",
         c.waiting, c.working, c.done_unseen
     )
+}
+
+const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Start `grove refresh` in the background at most every 10 s. Costs one
+/// stat on the hot path; no daemon (ADR 3).
+fn maybe_spawn_refresh() {
+    let stamp = crate::paths::state_dir().join("refresh.stamp");
+    let fresh = std::fs::metadata(&stamp)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < REFRESH_EVERY);
+    if fresh || std::fs::write(&stamp, b"").is_err() {
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        use std::process::Stdio;
+        let _ = std::process::Command::new(exe)
+            .arg("refresh")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
 }

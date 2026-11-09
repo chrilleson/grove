@@ -186,6 +186,7 @@ pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) ->
             worktree: wt_s,
             team,
             branch: Some(branch),
+            base: Some(base.clone()),
         },
         crate::now(),
     )?;
@@ -321,7 +322,18 @@ pub fn unsaved_work(worktree: &Path, branch: &str) -> Result<Option<String>> {
             if n == 1 { "" } else { "s" }
         )));
     }
-    // Commits reachable only from this task's branch: on no other branch and no remote.
+    let n = commits_only_here(worktree, branch)?;
+    if n > 0 {
+        return Ok(Some(format!(
+            "{n} commit{} not pushed or merged anywhere",
+            if n == 1 { "" } else { "s" }
+        )));
+    }
+    Ok(None)
+}
+
+/// Commits reachable only from this task's branch: on no other branch and no remote.
+pub fn commits_only_here(worktree: &Path, branch: &str) -> Result<usize> {
     // --exclude patterns for --branches are written without the refs/heads/ prefix.
     let exclude = format!("--exclude={branch}");
     let only_here = git(
@@ -336,14 +348,43 @@ pub fn unsaved_work(worktree: &Path, branch: &str) -> Result<Option<String>> {
             "--remotes",
         ],
     )?;
-    let n: usize = only_here.parse().unwrap_or(0);
-    if n > 0 {
-        return Ok(Some(format!(
-            "{n} commit{} not pushed or merged anywhere",
-            if n == 1 { "" } else { "s" }
-        )));
+    Ok(only_here.parse().unwrap_or(0))
+}
+
+/// Lines added and removed by the task: everything in the worktree
+/// (committed, uncommitted and untracked) compared with where it forked
+/// from `base`.
+pub fn diff_stats(worktree: &Path, base: Option<&str>) -> Result<(i64, i64)> {
+    let base = base.map(String::from).unwrap_or_else(|| default_base(worktree));
+    let fork = git(worktree, &["merge-base", "HEAD", &base]).unwrap_or_else(|_| "HEAD".into());
+    let (mut added, mut removed) = (0, 0);
+    for line in git(worktree, &["diff", "--numstat", &fork])?.lines() {
+        let mut cols = line.split('\t');
+        // Binary files show "-"; they don't count.
+        added += cols.next().and_then(|a| a.parse::<i64>().ok()).unwrap_or(0);
+        removed += cols.next().and_then(|r| r.parse::<i64>().ok()).unwrap_or(0);
     }
-    Ok(None)
+    for file in git(worktree, &["ls-files", "--others", "--exclude-standard"])?.lines() {
+        let path = worktree.join(file);
+        if path.metadata().map(|m| m.len() > 1_000_000).unwrap_or(true) {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            added += text.lines().count() as i64;
+        }
+    }
+    Ok((added, removed))
+}
+
+/// `grove refresh`: update cached diff stats for every task. Spawned in the
+/// background by `grove status`, so it may take its time.
+pub fn refresh(store: &Store) -> Result<()> {
+    for t in store.list()? {
+        if let Ok((a, r)) = diff_stats(Path::new(&t.worktree), t.base.as_deref()) {
+            store.set_diff(&t.id, a, r)?;
+        }
+    }
+    Ok(())
 }
 
 /// Teardown: refuses unsaved work unless `force`. The session is killed

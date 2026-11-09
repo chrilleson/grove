@@ -8,6 +8,7 @@ fn new_task(slug: &str) -> NewTask {
         worktree: format!("/r/.worktrees/api/{slug}"),
         team: false,
         branch: None,
+        base: None,
     }
 }
 

@@ -97,6 +97,15 @@ fn new_creates_worktree_setup_and_session() {
         widths()
     );
 
+    // the status line kicks off a background refresh that fills in diff stats
+    std::fs::write(wt.join("added.txt"), "1\n2\n3\n").unwrap();
+    w.grove().arg("status").assert().success();
+    let diff = wait_for(|| {
+        let t = store.get("api/fix-login").unwrap().unwrap();
+        (t.diff_added >= Some(3)).then_some(t.diff_added)
+    });
+    assert!(diff.is_some(), "diff never refreshed");
+
     // second task gets the next number and port block; duplicate refused
     w.grove()
         .args(["new", "api", "other", "--detach"])

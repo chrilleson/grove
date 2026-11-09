@@ -81,6 +81,7 @@ fn hook_binary_updates_state_and_logs_payload() {
                 worktree: "/w".into(),
                 team: false,
                 branch: None,
+                base: None,
             },
             1,
         )
