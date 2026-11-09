@@ -209,3 +209,35 @@ fn rm_refuses_commits_that_exist_only_on_the_task_branch() {
         .stderr(predicates::str::contains("1 commit"));
     w.grove().args(["rm", "api/work", "--force"]).assert().success();
 }
+
+#[test]
+fn open_editor_starts_the_editor_in_the_shell_pane() {
+    if !has_tmux() {
+        return;
+    }
+    let w = World::new();
+    w.write_config("editor = \"echo editor-opened\"");
+    w.git_repo("api");
+    w.grove().args(["new", "api", "x", "--detach"]).assert().success();
+    // wait until setup has handed the pane to the shell
+    let shell = "=api/x:0.2";
+    assert!(
+        wait_for(|| w
+            .tmux(&["capture-pane", "-J", "-p", "-t", shell])
+            .contains("started")
+            .then_some(()))
+        .is_some()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    w.grove().args(["open", "editor", "api/x"]).assert().success();
+    let opened = wait_for(|| {
+        let out = w.tmux(&["capture-pane", "-J", "-p", "-t", shell]);
+        out.lines().any(|l| l.trim() == "editor-opened .").then_some(())
+    });
+    assert!(
+        opened.is_some(),
+        "{}",
+        w.tmux(&["capture-pane", "-J", "-p", "-t", shell])
+    );
+}

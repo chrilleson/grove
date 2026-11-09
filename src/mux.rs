@@ -56,6 +56,12 @@ pub trait Mux {
     /// Switch the current client, or attach when not inside tmux.
     fn switch_to(&self, name: &str) -> Result<()>;
     fn message(&self, text: &str);
+    /// The program running in a pane (e.g. `zsh`, `nvim`).
+    fn pane_command(&self, session: &str, role: Role) -> Result<String>;
+    /// A window in the session running `cmd`.
+    fn new_window(&self, session: &str, cwd: &str, cmd: &str) -> Result<()>;
+    /// A bordered popup over the current client running `cmd`.
+    fn popup(&self, cwd: &str, title: &str, cmd: &str) -> Result<()>;
 }
 
 pub struct Tmux {
@@ -244,6 +250,42 @@ impl Mux for Tmux {
         self.run(&["send-keys", "-t", &pane, "-l", command])?;
         self.run(&["send-keys", "-t", &pane, "Enter"])?;
         Ok(())
+    }
+
+    fn pane_command(&self, session: &str, role: Role) -> Result<String> {
+        let pane = self.pane(session, role)?;
+        self.run(&["display-message", "-p", "-t", &pane, "#{pane_current_command}"])
+    }
+
+    fn new_window(&self, session: &str, cwd: &str, cmd: &str) -> Result<()> {
+        self.run(&[
+            "new-window",
+            "-t",
+            &format!("{}:", exact(session)),
+            "-c",
+            cwd,
+            cmd,
+        ])
+        .map(|_| ())
+    }
+
+    fn popup(&self, cwd: &str, title: &str, cmd: &str) -> Result<()> {
+        let border = format!("fg={}", theme::LINE_HI);
+        let args = [
+            "display-popup",
+            "-E",
+            "-w",
+            "90%",
+            "-h",
+            "90%",
+            "-b",
+            "rounded",
+            "-S",
+            &border,
+        ];
+        let mut args = args.to_vec();
+        args.extend(["-T", title, "-d", cwd, cmd]);
+        self.run(&args).map(|_| ())
     }
 
     fn focus(&self, session: &str, role: Role) -> Result<()> {

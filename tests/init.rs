@@ -16,6 +16,9 @@ fn tmux_conf_binds_alt_keys_and_hooks() {
         "bind-key -n M-9 run-shell -b '/opt/bin/grove go 9'",
         "set-hook -ga client-session-changed",
         "bind-key -n M-g switch-client -T grove",
+        "bind-key -n M-c run-shell -b '/opt/bin/grove open lazygit'",
+        "bind-key -n M-e run-shell -b '/opt/bin/grove open editor'",
+        "bind-key -n M-v run-shell -b '/opt/bin/grove open code'",
         "bind-key -T grove x confirm-before",
     ] {
         assert!(conf.contains(needle), "missing {needle:?} in\n{conf}");
