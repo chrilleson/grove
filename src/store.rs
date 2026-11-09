@@ -49,6 +49,8 @@ pub struct NewTask {
     pub slug: String,
     pub worktree: String,
     pub team: bool,
+    /// Defaults to the slug.
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,10 +103,11 @@ pub struct Store {
     port_block: i64,
 }
 
-/// tmux treats `.` and `:` specially in targets; a leading dot (dotfiles
-/// repos) would turn into an ugly `_`, so it is dropped.
+/// The task id as a tmux session name: `repo/slug`. tmux treats `.` and `:`
+/// specially in targets; a leading dot (dotfiles repos) is dropped rather
+/// than shown as `_`.
 pub fn session_name(repo: &str, slug: &str) -> String {
-    format!("{}-{slug}", repo.trim_start_matches('.')).replace(['.', ':'], "_")
+    format!("{}/{slug}", repo.trim_start_matches('.')).replace(['.', ':'], "_")
 }
 
 const SCHEMA: &str = "
@@ -190,7 +193,7 @@ impl Store {
         self.conn.execute(
             "INSERT INTO tasks (id, repo, root, slug, branch, worktree, session, number, state, seen,
                 state_since, team, port_base, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, 'idle', 1, ?8, ?9, ?10, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?11, ?5, ?6, ?7, 'idle', 1, ?8, ?9, ?10, ?8)",
             params![
                 id,
                 t.repo,
@@ -201,7 +204,8 @@ impl Store {
                 number,
                 now,
                 t.team,
-                port_base
+                port_base,
+                t.branch.as_deref().unwrap_or(&t.slug)
             ],
         )?;
         Ok(self.get(&id)?.expect("just inserted"))

@@ -120,7 +120,7 @@ fn try_run(event: &str) -> anyhow::Result<()> {
     if Tmux::reachable_from_env()
         && let Ok(pane) = std::env::var("TMUX_PANE")
     {
-        tmux.set_pane_state(&pane, &pane_state(&t.task));
+        tmux.set_pane_state(&pane, &crate::sidebar::pane_state(&t.task));
     }
 
     if t.newly_needs_you && !viewed && crate::notify::enabled(config.notify) {
@@ -141,13 +141,4 @@ fn log_line(v: &Value) -> anyhow::Result<()> {
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(f, "{v}")?;
     Ok(())
-}
-
-fn pane_state(t: &crate::store::Task) -> String {
-    let color = crate::sidebar::state_color(t);
-    format!(
-        "#[fg={color}]{} {}#[default]",
-        crate::sidebar::icon(t),
-        crate::sidebar::state_words(t)
-    )
 }

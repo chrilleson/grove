@@ -83,48 +83,98 @@ fn deep_merge(base: &mut toml::Table, over: toml::Table) {
 
 /// Copy/symlink files from the main checkout, then run commands in the
 /// worktree. Returns the first failing command, if any.
+/// Print a quiet `grove:` progress line, as in the design (image 07).
+pub fn say(msg: &str) {
+    println!("{}", dim(&format!("grove: {msg}")));
+}
+
+fn dim(s: &str) -> String {
+    let v = u32::from_str_radix(crate::theme::DIM.trim_start_matches('#'), 16).unwrap_or(0x888888);
+    format!(
+        "\x1b[38;2;{};{};{}m{s}\x1b[0m",
+        v >> 16,
+        (v >> 8) & 0xff,
+        v & 0xff
+    )
+}
+
+/// Copy/symlink files from the main checkout, then run commands in the
+/// worktree. Each command's output is shown only if it fails. Returns the
+/// first failing command, if any.
 pub fn run(
     cfg: &RepoConfig,
     main: &Path,
     worktree: &Path,
     env: &[(String, String)],
 ) -> Result<Option<String>> {
+    let (mut copied, mut linked, mut missing) = (vec![], vec![], vec![]);
     for f in &cfg.setup.copy {
         let (src, dst) = (main.join(f), worktree.join(f));
         if !src.exists() {
-            eprintln!("grove: setup: {f} not found in main checkout, skipped");
+            missing.push(f.as_str());
             continue;
         }
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
         copy_recursive(&src, &dst).with_context(|| format!("copying {f}"))?;
+        copied.push(f.as_str());
     }
     for f in &cfg.setup.symlink {
         let (src, dst) = (main.join(f), worktree.join(f));
         if !src.exists() {
-            eprintln!("grove: setup: {f} not found in main checkout, skipped");
+            missing.push(f.as_str());
             continue;
         }
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
-        if dst.symlink_metadata().is_ok() {
-            continue;
+        if dst.symlink_metadata().is_err() {
+            std::os::unix::fs::symlink(&src, &dst).with_context(|| format!("linking {f}"))?;
         }
-        std::os::unix::fs::symlink(&src, &dst).with_context(|| format!("linking {f}"))?;
+        linked.push(f.as_str());
     }
+    let mut parts = vec![];
+    if !copied.is_empty() {
+        parts.push(format!("copied {}", copied.join(", ")));
+    }
+    if !linked.is_empty() {
+        parts.push(format!("symlinked {}", linked.join(", ")));
+    }
+    if !parts.is_empty() {
+        say(&parts.join(" · "));
+    }
+    if !missing.is_empty() {
+        say(&format!(
+            "not in the main checkout, skipped: {}",
+            missing.join(", ")
+        ));
+    }
+
     for cmd in &cfg.setup.run {
-        eprintln!("grove: setup: {cmd}");
-        let ok = Command::new("sh")
+        use std::io::Write;
+        print!("{}", dim(&format!("grove: {cmd} …")));
+        let _ = std::io::stdout().flush();
+        let started = std::time::Instant::now();
+        let out = Command::new("sh")
             .args(["-c", cmd])
             .current_dir(worktree)
             .envs(env.iter().map(|(k, v)| (k, v)))
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok {
-            return Ok(Some(cmd.clone()));
+            .stdin(std::process::Stdio::null())
+            .output();
+        let secs = started.elapsed().as_secs_f32();
+        match out {
+            Ok(o) if o.status.success() => println!("{}", dim(&format!(" done ({secs:.1}s)"))),
+            Ok(o) => {
+                println!(" failed");
+                let _ = std::io::stdout().write_all(&o.stdout);
+                let _ = std::io::stdout().write_all(&o.stderr);
+                return Ok(Some(cmd.clone()));
+            }
+            Err(e) => {
+                println!(" failed: {e}");
+                return Ok(Some(cmd.clone()));
+            }
         }
     }
     Ok(None)

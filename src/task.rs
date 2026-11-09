@@ -154,47 +154,54 @@ pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) ->
         .clone()
         .or(rc.base.clone())
         .unwrap_or_else(|| default_base(&repo.dir));
+    let branch = format!("{}{}", config.branch_prefix, opts.slug);
+
+    // What happened before the session existed; replayed in its shell pane.
+    let mut log = vec![];
+    if let Some((remote, name)) = base.split_once('/')
+        && git(&repo.dir, &["remote", "get-url", remote]).is_ok()
+    {
+        log.push(format!("fetching {base}"));
+        if let Err(e) = git_quiet_fetch(&repo.dir, remote, name) {
+            log.push(format!("fetch failed, using the local {base}: {e}"));
+        }
+    }
+    let wt_s = wt.to_string_lossy().into_owned();
     // --no-track: the task branch must not push to the base branch by accident.
     git(
         &repo.dir,
-        &[
-            "worktree",
-            "add",
-            "--no-track",
-            "-b",
-            &opts.slug,
-            &wt.to_string_lossy(),
-            &base,
-        ],
+        &["worktree", "add", "--no-track", "-b", &branch, &wt_s, &base],
     )?;
+    log.push(format!(
+        "git worktree add -b {branch} {} {base}",
+        crate::paths::tilde(&wt)
+    ));
+    exclude_grove_dir(&wt)?;
 
     let task = store.add_task(
         NewTask {
             repo: repo.name.clone(),
             root: repo.root.to_string_lossy().into_owned(),
             slug: opts.slug.clone(),
-            worktree: wt.to_string_lossy().into_owned(),
+            worktree: wt_s,
             team,
+            branch: Some(branch),
         },
         crate::now(),
     )?;
 
     if let Some(brief) = opts.brief.as_deref() {
         write_brief(&wt, brief)?;
+        log.push(format!("wrote {BRIEF} (excluded from git)"));
     }
+    std::fs::write(wt.join(NEW_LOG), log.join("\n") + "\n")?;
 
     let mut env = vec![("GROVE_TASK".to_string(), task.id.clone())];
     env.extend(rc.port_env(task.port_base));
     if team {
         env.push(("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), "1".into()));
     }
-
     let exe = std::env::current_exe()?.to_string_lossy().into_owned();
-    let shell = std::env::var("SHELL").ok();
-    let shell = shell
-        .as_deref()
-        .and_then(|s| s.rsplit('/').next())
-        .unwrap_or("shell");
     mux.create_task_session(&SessionSpec {
         name: session,
         cwd: wt.clone(),
@@ -203,7 +210,9 @@ pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) ->
         sidebar_width: config.sidebar_width,
         shell_percent: config.shell_percent,
         agent_title: format!("claude · {}", task.id),
-        shell_title: format!("{shell} · {}", crate::paths::tilde(&wt)),
+        agent_state: crate::sidebar::pane_state(&task),
+        // Follows the program in the pane: "zsh · ~/…", "nvim · ~/…".
+        shell_title: format!("#{{pane_current_command}} · {}", crate::paths::tilde(&wt)),
         shell_first: Some(format!("'{exe}' setup '{}'", task.id)),
     })?;
     Ok(store.get(&task.id)?.expect("exists"))
@@ -211,12 +220,25 @@ pub fn new_task(config: &Config, store: &Store, mux: &dyn Mux, opts: NewOpts) ->
 
 const BRIEF: &str = ".grove/brief.md";
 
-/// Write the brief into the worktree and hide `.grove/` from git via the
-/// repo's local exclude file, so it never shows up as a change.
-fn write_brief(wt: &Path, brief: &str) -> Result<()> {
-    let path = wt.join(BRIEF);
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    std::fs::write(&path, format!("{}\n", brief.trim_end()))?;
+const NEW_LOG: &str = ".grove/new.log";
+
+fn git_quiet_fetch(repo: &Path, remote: &str, name: &str) -> Result<()> {
+    // Never prompt for credentials: a hung fetch would hang `grove new`.
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["fetch", "--quiet", remote, name])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
+/// Hide `.grove/` (brief, logs) from git via the repo's local exclude file.
+fn exclude_grove_dir(wt: &Path) -> Result<()> {
     let common = PathBuf::from(git(wt, &["rev-parse", "--git-common-dir"])?);
     let exclude = if common.is_absolute() {
         common
@@ -234,6 +256,12 @@ fn write_brief(wt: &Path, brief: &str) -> Result<()> {
         };
         std::fs::write(&exclude, format!("{current}{sep}.grove/\n"))?;
     }
+    std::fs::create_dir_all(wt.join(".grove"))?;
+    Ok(())
+}
+
+fn write_brief(wt: &Path, brief: &str) -> Result<()> {
+    std::fs::write(wt.join(BRIEF), format!("{}\n", brief.trim_end()))?;
     Ok(())
 }
 
@@ -247,15 +275,20 @@ pub fn run_setup(config: &Config, store: &Store, mux: &dyn Mux, id: &str) -> Res
     let mut env = vec![("GROVE_TASK".to_string(), task.id.clone())];
     env.extend(rc.port_env(task.port_base));
 
-    println!("grove: session {} · {}", task.id, crate::paths::tilde(&wt));
-    println!("grove: branch {} · GROVE_PORT={}", task.branch, task.port_base);
+    for line in std::fs::read_to_string(wt.join(NEW_LOG))
+        .unwrap_or_default()
+        .lines()
+    {
+        setup::say(line);
+    }
     if let Some(failed) = setup::run(&rc, &repo, &wt, &env)? {
         store.apply(&task.id, Signal::Idle, crate::now(), false)?;
         store.set_info(&task.id, &format!("setup failed: {failed}"))?;
-        println!("grove: setup failed: {failed}");
-        println!("grove: fix it here, then run: grove setup {}", task.id);
+        setup::say(&format!("setup failed: {failed}"));
+        setup::say(&format!("fix it here, then run: grove setup {}", task.id));
         return Ok(());
     }
+    setup::say(&format!("session {} · GROVE_PORT={}", task.id, task.port_base));
 
     let mut agent_cmd = config.agent_command.clone();
     if task.team {
@@ -266,12 +299,12 @@ pub fn run_setup(config: &Config, store: &Store, mux: &dyn Mux, id: &str) -> Res
         agent_cmd.push_str(" \"Read .grove/brief.md and start.\"");
     }
     mux.type_into(&task.session, Role::Agent, &agent_cmd)?;
-    println!(
-        "grove: started {}{}{}",
+    setup::say(&format!(
+        "started {}{}{}",
         config.agent_command.split_whitespace().next().unwrap_or("agent"),
         if has_brief { " on the brief" } else { "" },
         if task.team { " (agent team)" } else { "" }
-    );
+    ));
     Ok(())
 }
 

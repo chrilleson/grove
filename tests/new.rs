@@ -26,7 +26,7 @@ fn new_creates_worktree_setup_and_session() {
         .success();
 
     let wt = w.root().join(".worktrees/api/fix-login");
-    assert_eq!(git(&wt, &["branch", "--show-current"]), "fix-login");
+    assert_eq!(git(&wt, &["branch", "--show-current"]), "grove/fix-login");
     // setup runs in the shell pane, so the session exists before it finishes
     let ports = wait_for(|| {
         std::fs::read_to_string(wt.join("ports.txt"))
@@ -46,19 +46,19 @@ fn new_creates_worktree_setup_and_session() {
     let t = store.get("api/fix-login").unwrap().expect("task stored");
     assert_eq!(
         (t.number, t.port_base, t.session.as_str()),
-        (1, 20000, "api-fix-login")
+        (1, 20000, "api/fix-login")
     );
 
-    let panes = w.tmux(&["list-panes", "-t", "=api-fix-login", "-F", "#{pane_current_path}"]);
+    let panes = w.tmux(&["list-panes", "-t", "=api/fix-login", "-F", "#{pane_current_path}"]);
     assert_eq!(panes.lines().count(), 3, "sidebar | agent | shell: {panes}");
-    let env = w.tmux(&["show-environment", "-t", "=api-fix-login"]);
+    let env = w.tmux(&["show-environment", "-t", "=api/fix-login"]);
     assert!(env.contains("GROVE_TASK=api/fix-login"), "{env}");
     assert!(env.contains("GROVE_PORT=20000"), "{env}");
     assert!(env.contains("PORT=20000"), "{env}");
 
     // after setup, the agent is started on the brief
     let agent = wait_for(|| {
-        let out = w.tmux(&["capture-pane", "-J", "-p", "-t", "=api-fix-login:0.1"]);
+        let out = w.tmux(&["capture-pane", "-J", "-p", "-t", "=api/fix-login:0.1"]);
         out.contains("agent Read .grove/brief.md and start.")
             .then_some(out)
     });
@@ -68,12 +68,12 @@ fn new_creates_worktree_setup_and_session() {
     let panes = w.tmux(&[
         "list-panes",
         "-t",
-        "=api-fix-login",
+        "=api/fix-login",
         "-F",
         "#{@grove_role}|#{@grove_title}",
     ]);
     let lines: Vec<_> = panes.lines().collect();
-    assert_eq!(lines[0], "sidebar|grove");
+    assert_eq!(lines[0], "sidebar|tasks");
     assert_eq!(lines[1], "agent|claude · api/fix-login");
     assert!(lines[2].starts_with("shell|"), "{panes}");
     assert_eq!(
@@ -81,16 +81,16 @@ fn new_creates_worktree_setup_and_session() {
             "show-options",
             "-wv",
             "-t",
-            "=api-fix-login:",
+            "=api/fix-login:",
             "pane-border-status"
         ]),
         "top"
     );
 
     // sidebar is the configured width and stays so when the window resizes
-    let widths = || w.tmux(&["list-panes", "-t", "=api-fix-login", "-F", "#{pane_width}"]);
+    let widths = || w.tmux(&["list-panes", "-t", "=api/fix-login", "-F", "#{pane_width}"]);
     assert_eq!(widths().lines().next(), Some("32"), "{}", widths());
-    w.tmux(&["resize-window", "-t", "=api-fix-login", "-x", "150", "-y", "40"]);
+    w.tmux(&["resize-window", "-t", "=api/fix-login", "-x", "150", "-y", "40"]);
     assert!(
         wait_for(|| (widths().lines().next() == Some("32")).then_some(())).is_some(),
         "sidebar drifted after resize: {}",
@@ -150,7 +150,7 @@ fn rm_removes_clean_task_and_refuses_dirty_one_without_force() {
     assert!(!git(&repo, &["branch", "--list", "clean"]).contains("clean"));
     assert!(
         !w.tmux(&["list-sessions", "-F", "#{session_name}"])
-            .contains("api-clean")
+            .contains("api/clean")
     );
 
     w.grove()

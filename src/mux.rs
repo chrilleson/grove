@@ -17,6 +17,8 @@ pub struct SessionSpec {
     /// Header text above the agent and shell panes.
     pub agent_title: String,
     pub shell_title: String,
+    /// Initial right-hand text of the agent header; the hook keeps it current.
+    pub agent_state: String,
     /// Runs in the shell pane before handing it to the user's shell (setup).
     pub shell_first: Option<String>,
 }
@@ -118,6 +120,11 @@ impl Tmux {
             .with_context(|| format!("no {} pane in {session}", role.as_str()))
     }
 
+    /// Set a pane's header text (the sidebar keeps its `tasks · N` current).
+    pub fn set_pane_title(&self, pane: &str, title: &str) {
+        let _ = self.run(&["set-option", "-p", "-t", pane, "@grove_title", title]);
+    }
+
     /// Show a task's state in its agent pane header. Called only on a state change.
     pub fn set_pane_state(&self, pane: &str, styled: &str) {
         let _ = self.run(&["set-option", "-p", "-t", pane, "@grove_state", styled]);
@@ -191,13 +198,14 @@ impl Mux for Tmux {
         let shell = self.run(&args)?;
 
         for (pane, role, title) in [
-            (&sidebar, Role::Sidebar, "grove"),
+            (&sidebar, Role::Sidebar, "tasks"),
             (&agent, Role::Agent, s.agent_title.as_str()),
             (&shell, Role::Shell, s.shell_title.as_str()),
         ] {
             self.run(&["set-option", "-p", "-t", pane, "@grove_role", role.as_str()])?;
             self.run(&["set-option", "-p", "-t", pane, "@grove_title", title])?;
         }
+        self.run(&["set-option", "-p", "-t", &agent, "@grove_state", &s.agent_state])?;
 
         // Setup output streams in the shell pane, then it becomes the user's
         // shell. Started only now, so it can find the other panes by role.
@@ -208,7 +216,7 @@ impl Mux for Tmux {
 
         let win = format!("{}:", exact(&s.name));
         let header = format!(
-            "#{{?pane_active,#[fg={dim}],#[fg={faint}]}} #{{@grove_title}}#{{?#{{@grove_state}}, · #{{@grove_state}},}} ",
+            "#{{?pane_active,#[fg={dim}],#[fg={faint}]}} #{{E:@grove_title}} #[align=right]#{{@grove_state}} ",
             dim = theme::DIM,
             faint = theme::FAINT
         );
