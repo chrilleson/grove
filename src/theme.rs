@@ -11,6 +11,9 @@ pub const FG: &str = "#d5dde7";
 pub const DIM: &str = "#7b889a";
 pub const FAINT: &str = "#4d5a6b";
 pub const LINE: &str = "#273241";
+pub const LINE_HI: &str = "#3a4a5e";
+pub const ERR: &str = "#ff7b72";
+pub const POPUP_BG: &str = "#10161f";
 pub const CURRENT_BG: &str = "#1f2a38";
 
 pub fn color(hex: &str) -> Color {

@@ -16,6 +16,13 @@ struct Cli {
     cmd: Cmd,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum Tool {
+    Lazygit,
+    Editor,
+    Code,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Claude Code hook entry point (reads the hook JSON on stdin)
@@ -63,6 +70,12 @@ enum Cmd {
         task: Option<String>,
         #[arg(long)]
         force: bool,
+    },
+    /// Open your tools on a task: lazygit popup, editor in the shell pane, VS Code
+    Open {
+        tool: Tool,
+        /// Number or id; defaults to the task you're in
+        task: Option<String>,
     },
     /// Update cached diff stats (started in the background by `grove status`)
     #[command(hide = true)]
@@ -176,13 +189,7 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
         Cmd::Rm { task, force } => {
             let t = match task {
                 Some(task) => find_task(store, &task)?,
-                None => match std::env::var("GROVE_TASK").ok() {
-                    Some(id) => store.get(&id)?,
-                    None => match mux.current_session() {
-                        Some(s) => store.by_session(&s)?,
-                        None => None,
-                    },
-                },
+                None => current_task(store, mux)?,
             };
             let Some(t) = t else {
                 anyhow::bail!("no such task (give a number or id)")
@@ -214,6 +221,16 @@ fn run(cmd: Cmd, config: &Config, store: &Store, mux: &Tmux) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Open { tool, task } => {
+            let t = match task {
+                Some(task) => find_task(store, &task)?,
+                None => current_task(store, mux)?,
+            };
+            let Some(t) = t else {
+                anyhow::bail!("no such task (give a number or id)")
+            };
+            open_tool(config, mux, &t, tool)
+        }
         Cmd::Refresh => crate::task::refresh(store),
         Cmd::Setup { task } => crate::task::run_setup(config, store, mux, &task),
         Cmd::Sidebar => crate::sidebar::run(config, false),
@@ -231,6 +248,57 @@ fn go_to(mux: &Tmux, t: &crate::store::Task) -> Result<()> {
     };
     let _ = mux.focus(&t.session, role);
     mux.switch_to(&t.session)
+}
+
+/// The task of the session we're in.
+fn current_task(store: &Store, mux: &Tmux) -> Result<Option<crate::store::Task>> {
+    if let Ok(id) = std::env::var("GROVE_TASK") {
+        return store.get(&id);
+    }
+    match mux.current_session() {
+        Some(s) => store.by_session(&s),
+        None => Ok(None),
+    }
+}
+
+const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "nu", "elvish", "xonsh"];
+
+/// `⌥c` / `⌥e` / `⌥v`. grove only opens the tools; you commit and push (spec: hard rule).
+pub fn open_tool(config: &Config, mux: &dyn Mux, t: &crate::store::Task, tool: Tool) -> Result<()> {
+    match tool {
+        Tool::Lazygit => {
+            let title = format!(" lazygit · {} → {} ", t.repo, t.branch);
+            mux.popup(&t.worktree, &title, "lazygit")
+        }
+        Tool::Editor => {
+            let cmd = format!("{} .", config.editor);
+            // In the shell pane when it's at a prompt (design image 03), else a new window.
+            let idle = mux
+                .pane_command(&t.session, Role::Shell)
+                .is_ok_and(|c| SHELLS.contains(&c.as_str()));
+            if idle {
+                mux.type_into(&t.session, Role::Shell, &cmd)?;
+                let _ = mux.focus(&t.session, Role::Shell);
+            } else {
+                mux.new_window(&t.session, &t.worktree, &cmd)?;
+            }
+            if std::env::var_os("TMUX").is_some() {
+                mux.switch_to(&t.session)?;
+            }
+            Ok(())
+        }
+        Tool::Code => {
+            use std::process::Stdio;
+            std::process::Command::new("code")
+                .arg(&t.worktree)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("starting VS Code (`code`): {e}"))
+        }
+    }
 }
 
 fn find_task(store: &Store, task: &str) -> Result<Option<crate::store::Task>> {
