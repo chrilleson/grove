@@ -1,0 +1,836 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>grove simulator</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one Ghostty window running tmux, framed by a slim header and a key reference you can tap. Single dark look by choice: it is a terminal. */
+:root{
+  --ground:#0d1117; --window:#131a23; --pane:#151d27; --line:#273241; --line-hi:#3a4a5e;
+  --fg:#d5dde7; --dim:#7b889a; --faint:#4d5a6b;
+  --wait:#f0b03f; --work:#6fb3ff; --done:#7fd492; --idle:#5d6877; --err:#ff7b72; --branch:#c79bff;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{background:var(--ground);color:var(--fg)}
+body{font-family:var(--sans);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end;justify-content:space-between}
+header h1{font-family:var(--mono);font-size:22px;margin:0;letter-spacing:-.01em}
+header h1 span{color:var(--wait)}
+header p{margin:4px 0 0;color:var(--dim);max-width:62ch;line-height:1.5;font-size:14px}
+.hint{font-family:var(--mono);font-size:12.5px;color:var(--fg);background:#1a2330;border:1px solid var(--line);border-radius:6px;padding:8px 12px;line-height:1.5}
+.hint b{color:var(--wait);font-weight:600}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{background:transparent;border:1px solid var(--line-hi);border-radius:6px;padding:6px 12px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+.btn:hover{color:var(--fg);border-color:var(--dim)}
+:focus-visible{outline:2px solid var(--work);outline-offset:2px}
+
+/* terminal window */
+.term{background:var(--window);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-family:var(--mono);font-size:12.5px;line-height:1.5;position:relative;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.titlebar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);color:var(--dim);font-size:12px}
+.dots{display:flex;gap:6px}.dots i{width:11px;height:11px;border-radius:50%;background:var(--line-hi);display:block}
+.titlebar .t{flex:1;text-align:center}
+.panes{display:flex;height:480px;position:relative}
+.pane{flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--pane)}
+.pane:last-child{border-right:0}
+.pane.focus{box-shadow:inset 0 2px 0 var(--work)}
+.pane-head{padding:4px 10px;color:var(--faint);font-size:11.5px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;white-space:nowrap;overflow:hidden}
+.pane.focus .pane-head{color:var(--dim)}
+.log{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 12px;white-space:pre-wrap;word-break:break-word}
+.inrow{display:flex;gap:6px;padding:6px 12px 10px;align-items:flex-start}
+.inrow input{flex:1;min-width:0;background:transparent;border:0;color:var(--fg);font:inherit;outline:none;padding:0}
+.ag-box{border:1px solid var(--line-hi);border-radius:6px;padding:6px 10px;margin:0 12px 10px}
+.ag-box .inrow{padding:0}
+.you{color:var(--dim)} .you::before{content:"> ";color:var(--faint)}
+.ag::before{content:"⏺ ";color:var(--fg)}
+.tool::before{content:"⏺ ";color:var(--done)} .tool b{font-weight:600}
+.res{color:var(--dim);padding-left:2ch} .res::before{content:"⎿  "}
+.sys{color:var(--faint)}
+.spin{color:var(--wait)}
+.ask{border:1px solid var(--wait);border-radius:6px;margin:4px 12px 10px;padding:8px 10px}
+.ask .q{margin-bottom:6px}
+.ask .opt{display:block;width:100%;text-align:left;background:none;border:0;padding:1px 0;color:var(--dim);font:inherit}
+.ask .opt.sel{color:var(--fg)} .ask .opt.sel::before{content:"❯ ";color:var(--wait)}
+.ask .opt:not(.sel)::before{content:"  "}
+.ask .h{color:var(--faint);margin-top:6px;font-size:11.5px}
+.c-dir{color:var(--work);font-weight:600}.c-br{color:var(--branch)}.c-st{color:var(--err)}.c-ok{color:var(--done)}.c-w{color:var(--wait)}.c-dim{color:var(--dim)}.c-faint{color:var(--faint)}.c-err{color:var(--err)}
+.prompt-arrow{color:var(--done)}
+
+/* nvim */
+.nvim{flex:1;display:flex;min-height:0;outline:none}
+.nv-tree{width:42%;max-width:240px;border-right:1px solid var(--line);padding:6px 0;overflow:auto}
+.nv-tree div{padding:0 10px;white-space:nowrap;color:var(--dim);cursor:pointer}
+.nv-tree div.sel{background:#1f2a38;color:var(--fg)}
+.nv-code{flex:1;min-width:0;overflow:auto;padding:6px 0;white-space:pre}
+.nv-code .ln{display:block;padding-right:12px}
+.nv-code .ln i{font-style:normal;display:inline-block;width:4ch;text-align:right;color:var(--faint);margin-right:1ch}
+.nv-code .ln u{text-decoration:none;display:inline-block;width:2ch}
+.nv-code .add u{color:var(--done)} .nv-code .add{background:rgba(127,212,146,.06)}
+.nv-line{padding:2px 10px;border-top:1px solid var(--line);color:var(--dim);font-size:11.5px;display:flex;justify-content:space-between}
+.nv-line b{background:var(--done);color:#0d1117;padding:0 6px;margin-right:8px;font-weight:600}
+
+/* status lines */
+.st1,.st2{display:flex;gap:12px;align-items:center;padding:2px 10px;white-space:nowrap;overflow:hidden}
+.st1{background:#1b2532;color:var(--dim)}
+.st1 .sess{color:var(--fg);font-weight:600}
+.st1 .grow{flex:1}
+.st1 .pfx{background:var(--work);color:#0d1117;padding:0 6px;font-weight:700;border-radius:2px}
+.st2{background:#111821;border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:none;padding-block:4px}
+.chip{border:0;background:none;padding:1px 6px;border-radius:3px;color:var(--dim);font:inherit;white-space:nowrap}
+.chip:hover{background:#1c2633}
+.chip.cur{color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.chip.waiting{color:var(--wait);font-weight:700;background:rgba(240,176,63,.1)}
+.chip.fresh{color:var(--done);font-weight:700;background:rgba(127,212,146,.1)}
+.chip.quiet{opacity:.75}
+.chip.blink{animation:blink 1.2s steps(2,start) infinite}
+.chip.more{color:var(--faint)}
+.variants{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;color:var(--dim)}
+.seg{display:inline-flex;border:1px solid var(--line-hi);border-radius:6px;overflow:hidden}
+.seg button{background:none;border:0;border-right:1px solid var(--line-hi);padding:5px 12px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:#1f2a38;color:var(--fg)}
+.side{width:236px;flex:none;border-right:1px solid var(--line);background:#111821;overflow-y:auto;padding:6px 0}
+.side .sh{padding:2px 10px 6px;color:var(--faint);font-size:11.5px}
+.side button{display:block;width:100%;text-align:left;background:none;border:0;padding:3px 10px;font:inherit;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side button:hover{background:#1c2633}
+.side button.cur{background:#1f2a38;color:var(--fg)}
+.side button.waiting{color:var(--wait);font-weight:700}
+.side button.fresh{color:var(--done);font-weight:700}
+.side small{display:block;color:var(--faint);font-size:11px;padding-left:4ch;font-weight:400}
+.tog{background:none;border:1px solid var(--line-hi);border-radius:3px;padding:1px 8px;font:inherit;color:var(--dim)}
+.tog[aria-pressed="true"]{border-color:var(--work);color:var(--fg)}
+@media (max-width:760px){.side{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:180px}}
+@keyframes blink{50%{background:rgba(240,176,63,.35)}}
+.i-waiting{color:var(--wait)}.i-working{color:var(--work)}.i-done{color:var(--done)}.i-idle{color:var(--idle)}
+
+/* popups */
+.pop{position:absolute;inset:24px 6%;background:#10161f;border:1px solid var(--line-hi);border-radius:6px;display:flex;flex-direction:column;z-index:5;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.pop-head{padding:4px 10px;border-bottom:1px solid var(--line);color:var(--dim);display:flex;justify-content:space-between;gap:8px}
+.pop-head b{color:var(--fg)}
+.pop-body{flex:1;overflow:auto;padding:6px 0;min-height:0}
+.pop-foot{border-top:1px solid var(--line);padding:4px 10px;color:var(--faint);white-space:nowrap;overflow-x:auto}
+.pop-foot b{color:var(--dim);font-weight:600}
+.row{display:grid;grid-template-columns:3ch 9ch minmax(0,1fr) 10ch 11ch 5ch;gap:1ch;padding:0 10px;white-space:nowrap;cursor:pointer}
+.row>span{overflow:hidden;text-overflow:ellipsis}
+.row.sel{background:#1f2a38}
+.row.sel .slug{color:var(--fg)}
+.lg{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:0;height:100%}
+.lg section{border-right:1px solid var(--line);padding:4px 10px;overflow:auto}
+.lg section:last-child{border-right:0}
+.lg h4{margin:0 0 4px;font-size:11.5px;color:var(--work);font-weight:600}
+.lg .f{white-space:nowrap;cursor:pointer;padding:0 4px}
+.lg .f.sel{background:#1f2a38}
+.field{display:flex;gap:8px;padding:4px 10px;align-items:center}
+.field label{color:var(--dim);width:7ch;flex:none}
+.field input{flex:1;min-width:0;background:#1a2330;border:1px solid var(--line);border-radius:3px;color:var(--fg);font:inherit;padding:2px 6px;outline:none}
+.field input:focus{border-color:var(--work)}
+.repo{padding:0 10px 0 calc(7ch + 18px);color:var(--dim);cursor:pointer}
+.repo.sel{color:var(--fg)}.repo.sel::before{content:"❯ ";color:var(--work);margin-left:-2ch}
+
+.toasts{position:absolute;top:44px;right:12px;display:flex;flex-direction:column;gap:8px;z-index:9;width:min(330px,calc(100% - 24px));pointer-events:none}
+.toast{background:#202a37;border:1px solid var(--line-hi);border-radius:8px;padding:8px 12px;font-family:var(--sans);font-size:13px;line-height:1.4;pointer-events:auto;animation:in .2s ease-out}
+.toast small{display:block;color:var(--dim);font-size:11.5px;margin-bottom:2px;font-family:var(--mono)}
+.toast.wait{border-color:var(--wait)}
+@keyframes in{from{transform:translateY(-6px);opacity:.4}}
+@media (prefers-reduced-motion:reduce){.chip.blink{animation:none;outline:1px solid var(--wait)}.toast{animation:none}}
+
+/* key reference */
+.keys{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.keys h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;font-weight:600}
+.keys ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.k{display:flex;gap:10px;align-items:baseline;width:100%;text-align:left;background:none;border:1px solid transparent;border-radius:6px;padding:4px 6px;font-size:13.5px}
+.k:hover{border-color:var(--line);background:#151d27}
+.k kbd{font-family:var(--mono);font-size:12px;color:var(--fg);background:#1a2330;border:1px solid var(--line-hi);border-radius:4px;padding:1px 6px;white-space:nowrap;flex:none;min-width:11ch;text-align:center}
+.k span{color:var(--dim)}
+.note{color:var(--dim);font-size:13px;line-height:1.55;max-width:75ch;margin:0}
+.note code{font-family:var(--mono);font-size:12px;color:var(--fg)}
+
+@media (max-width:760px){
+  .panes{flex-direction:column;height:auto}
+  .pane{border-right:0;border-bottom:1px solid var(--line);height:330px;flex:none}
+  .pop{inset:8px 8px}
+  .row{grid-template-columns:3ch 8ch minmax(0,1fr) 9ch}
+  .row .pr,.row .age{display:none}
+  .lg{grid-template-columns:1fr}
+  .lg section{border-right:0;border-bottom:1px solid var(--line)}
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>grove<span>.</span> simulator</h1>
+      <p>A working mock of grove inside Ghostty and tmux. Agents run on their own clock and ask for you when they need you. The right pane is a normal shell in the task's worktree, and grove never commits or pushes for you.</p>
+    </div>
+    <button class="btn" id="reset" type="button">Restart simulation</button>
+  </header>
+  <div class="hint" id="hint"></div>
+  <div class="variants"><span>Task list style</span>
+    <div class="seg" id="variant" role="group" aria-label="Task list style">
+      <button type="button" data-v="adaptive" aria-pressed="false">Adaptive chips</button>
+      <button type="button" data-v="compact" aria-pressed="false">Compact chips</button>
+      <button type="button" data-v="sidebar" aria-pressed="true">Sidebar</button>
+    </div>
+    <span id="variantNote"></span>
+  </div>
+
+  <div class="term" id="term">
+    <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="t" id="wintitle">tmux</div><div style="width:45px"></div></div>
+    <div class="panes" id="panes">
+      <nav class="side" id="side" hidden aria-label="Tasks"></nav>
+      <div class="pane" id="pAgent">
+        <div class="pane-head"><span id="agHead">claude</span><span id="agState"></span></div>
+        <div class="log" id="agLog"></div>
+        <div id="agAsk"></div>
+        <div class="ag-box" id="agBox"><div class="inrow"><span class="c-faint">&gt;</span><input id="agIn" autocomplete="off" spellcheck="false" aria-label="Message the agent"></div></div>
+      </div>
+      <div class="pane" id="pRight">
+        <div class="pane-head"><span id="rHead">zsh</span><span id="rState"></span></div>
+        <div class="log" id="shLog"></div>
+        <div class="inrow" id="shRow"><span id="shPrompt"></span><input id="shIn" autocomplete="off" spellcheck="false" autocapitalize="off" aria-label="Shell"></div>
+        <div class="nvim" id="nvim" tabindex="0" hidden></div>
+      </div>
+      <div id="popHost"></div>
+    </div>
+    <div class="st1" id="st1"></div>
+    <div class="st2" id="st2"></div>
+    <div class="toasts" id="toasts"></div>
+  </div>
+
+  <div class="keys" id="keys">
+    <div><h3>Attention</h3><ul>
+      <li><button class="k" data-a="w" type="button"><kbd>⌥w</kbd><span>Next task that needs you: waiting first, then finished</span></button></li>
+      <li><button class="k" data-a="s" type="button"><kbd>⌥s</kbd><span>Dashboard popup</span></button></li>
+      <li><button class="k" data-a="l" type="button"><kbd>⌥Tab</kbd><span>Back to the last task</span></button></li>
+      <li><button class="k" data-a="1" type="button"><kbd>⌥1–9</kbd><span>Task by number (or click it)</span></button></li>
+    </ul></div>
+    <div><h3>Your tools</h3><ul>
+      <li><button class="k" data-a="c" type="button"><kbd>⌥c</kbd><span>lazygit popup: stage, commit, push</span></button></li>
+      <li><button class="k" data-a="e" type="button"><kbd>⌥e</kbd><span>Neovim on the worktree</span></button></li>
+      <li><button class="k" data-a="v" type="button"><kbd>⌥v</kbd><span>VS Code on the worktree</span></button></li>
+      <li><button class="k" data-a="b" type="button"><kbd>⌥g b</kbd><span>Edit the task brief</span></button></li>
+    </ul></div>
+    <div><h3>Tasks and panes</h3><ul>
+      <li><button class="k" data-a="n" type="button"><kbd>⌥n</kbd><span>New task, optionally as an agent team</span></button></li>
+      <li><button class="k" data-a="p" type="button"><kbd>⌥g p</kbd><span>Open or show the PR</span></button></li>
+      <li><button class="k" data-a="left" type="button"><kbd>⌃a ←  ⌃a →</kbd><span>Focus agent or shell pane (or click it)</span></button></li>
+      <li><button class="k" data-a="sh" type="button"><kbd>help</kbd><span>Type in the shell: grove ls, git status, grove pr…</span></button></li>
+    </ul></div>
+  </div>
+  <p class="note">Everything here is simulated: agents follow short scripts and time runs about five times faster than real. In this page <code>⌥</code> is Alt, or Option on a Mac; your OS may keep <code>⌥Tab</code> for itself, so tap it here instead. Repos live under <code>~/dev/repositories/work</code> and <code>~/dev/repositories/personal</code>, each with its own <code>.worktrees/</code>.</p>
+</div>
+
+<script>
+(() => {
+const ROOT = '~/dev/repositories';
+const ROOTOF = {portal:'work', api:'work', infra:'work', integrations:'work', dotfiles:'personal', 'web-shop':'personal', 'design-tokens':'personal'};
+const REPOS = Object.keys(ROOTOF);
+const REPO_PATH = r => `${ROOT}/${ROOTOF[r]}/${r}`;
+const WT = t => `${ROOT}/${ROOTOF[t.repo]}/.worktrees/${t.repo}/${t.slug}`;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ICON = {waiting:'⏳', working:'●', done:'✓', idle:'○'};
+const ORDER = {waiting:0, done:1, working:2, idle:3};
+const SPEED = 5;              // sim seconds per real second
+const BLINK_AFTER = 120;      // sim seconds waiting before the chip blinks
+const RENOTIFY_AFTER = 600;   // second notification
+
+let S, sim, spinI = 0;
+
+/* ---------- model ---------- */
+function T(o){
+  return Object.assign({status:'idle', since:0, lines:[], files:[], commits:[], ahead:0, pushed:false, pr:null,
+    ask:null, sel:0, queue:[], shell:[], notified:0, renotified:false, setup:'pnpm', seen:true, team:false}, o, {branch:'grove/'+o.slug});
+}
+const L = (k,t) => ({k,t});
+function step(w, f){ return {w, f}; }
+
+function seed(){
+  sim = 0;
+  const t1 = T({n:1, repo:'portal', slug:'fix-login-redirect', title:'Fix login redirect loop', status:'waiting', since:-90,
+    lines:[L('you','Read .grove/brief.md and start.'), L('tool','Read(.grove/brief.md)'), L('res','Read 14 lines'),
+      L('tool','Grep("redirect", src/)'), L('res','Found 6 matches in 3 files'), L('tool','Read(src/middleware.ts)'), L('res','Read 48 lines'),
+      L('ag','The loop comes from the middleware matcher: it also matches /login, so an unauthenticated request to /login redirects to /login again.')],
+    files:[{p:'src/middleware.ts', st:'M', a:31, d:6, staged:false},{p:'src/app/login/page.tsx', st:'M', a:11, d:1, staged:false}]});
+  t1.ask = {q:'How should I fix it?', opts:['Exclude /login and /auth/* from the matcher','Move the auth check into the (app) layout','Explain the trade-off first'], on: answerLogin};
+
+  const t2 = T({n:2, repo:'api', slug:'rate-limit-webhooks', title:'Rate-limit outgoing webhooks', status:'working', since:-2400, setup:'dotnet',
+    lines:[L('you','Read .grove/brief.md and start.'), L('tool','Read(src/Webhooks/WebhookDispatcher.cs)'), L('res','Read 132 lines'),
+      L('ag','Adding a token-bucket limiter per subscriber, persisted so it survives restarts.'),
+      L('tool','Write(src/Webhooks/RateLimiting/TokenBucket.cs)'), L('res','Wrote 74 lines')],
+    files:[{p:'src/Webhooks/RateLimiting/TokenBucket.cs', st:'A', a:74, d:0, staged:false},{p:'src/Webhooks/WebhookDispatcher.cs', st:'M', a:38, d:3, staged:false}]});
+  t2.queue = [
+    step(60, t => { t.lines.push(L('tool','Edit(src/Data/AppDbContext.cs)'), L('res','Added DbSet<SubscriberBucket>')); addFile(t,'src/Data/AppDbContext.cs','M',6,0); }),
+    step(50, t => ask(t, 'Bash(dotnet ef migrations add WebhookRateLimit)\nDo you want to run this command?', ['Yes','Yes, and don\'t ask again for dotnet ef','No, I\'ll run it myself'], answerMigration)),
+  ];
+
+  const t3 = T({n:3, repo:'portal', slug:'dark-mode-settings', title:'Dark mode toggle in settings', status:'working', since:-180,
+    lines:[L('you','Read .grove/brief.md and start.'), L('tool','Read(src/app/settings/page.tsx)'), L('res','Read 88 lines'),
+      L('ag','I\'ll add a theme provider with next-themes and a three-way toggle (system, light, dark).')],
+    files:[{p:'src/components/theme-provider.tsx', st:'A', a:24, d:0, staged:false}]});
+  t3.queue = [
+    step(40, t => { t.lines.push(L('tool','Write(src/components/theme-toggle.tsx)'), L('res','Wrote 52 lines')); addFile(t,'src/components/theme-toggle.tsx','A',52,0); }),
+    step(45, t => { t.lines.push(L('tool','Bash(pnpm test settings)'), L('res','✓ 9 passed (1.8s)')); addFile(t,'src/app/settings/page.tsx','M',18,4); }),
+    step(30, t => { t.lines.push(L('ag','Done. The toggle lives in Settings → Appearance and remembers the choice per device. Ready for your review.')); setStatus(t,'done'); }),
+  ];
+
+  const t4 = T({n:4, repo:'infra', slug:'bump-node-22', title:'Bump Node to 22 in CI images', status:'done', since:-3600, pushed:true, pr:{n:88, checks:'pending'},
+    lines:[L('you','Read .grove/brief.md and start.'), L('tool','Edit(docker/node.Dockerfile)'), L('res','node:20-alpine → node:22-alpine'),
+      L('ag','Updated three Dockerfiles and the CI matrix. You pushed and opened PR #88.')],
+    commits:[{h:'a41c9e2', m:'Bump Node to 22 in CI images'}]});
+  t4.queue = [ step(140, t => { t.pr.checks = 'green'; toast('infra/bump-node-22', 'PR #88: all checks passed', false); }) ];
+
+  const t5 = T({n:5, repo:'dotfiles', slug:'zsh-linux', title:'Zsh on Linux', status:'idle', since:-86400, setup:'none',
+    lines:[L('sys','Session ended yesterday. Start the agent again with: claude --continue')],
+    files:[{p:'zsh/.zshrc', st:'M', a:20, d:31, staged:true}], ahead:1, commits:[{h:'9f2e01b', m:'Add zsh config for Linux'}]});
+
+  const t6 = T({n:6, repo:'web-shop', slug:'checkout-swish-payments', title:'Add Swish to checkout', status:'working', since:-600, team:true,
+    lines:[L('you','Read .grove/brief.md and start.'), L('sys','Team mode: lead + 2 teammates (api-client, ui) in their own panes'),
+      L('ag','The api-client teammate is writing the Swish client; ui is building the payment step. I\'m coordinating.')],
+    files:[{p:'src/payments/swish/client.ts', st:'A', a:88, d:0, staged:false}]});
+  t6.queue = [
+    step(70, t => { t.lines.push(L('sys','Teammate ui finished: src/checkout/PaymentStep.tsx'), L('tool','Bash(pnpm test checkout)'), L('res','✓ 23 passed (4.0s)')); addFile(t,'src/checkout/PaymentStep.tsx','A',64,0); }),
+    step(60, t => ask(t, 'Teammate api-client asks: use the Swish test certificate from .env.local or generate a new one?', ['Use the one in .env.local','Generate a new test certificate'], (t,i)=>{ t.queue.push(step(30, t=>{ t.lines.push(L('ag','Done. Both teammates finished and the checkout tests pass. Ready for your review.')); setStatus(t,'done'); })); })),
+  ];
+
+  const t7 = T({n:7, repo:'integrations', slug:'fortnox-sync-retries', title:'Retry failed Fortnox syncs', status:'idle', since:-7200, setup:'dotnet',
+    lines:[L('sys','No agent running. Type below to start one.')]});
+
+  S = {tasks:[t1,t2,t3,t4,t5,t6,t7], cur:2, last:null, focus:'shell', prefix:0, popup:null, right:'shell', nextN:6, nv:{sel:0}};
+  S.tasks.forEach(t => { t.shell = [motd(t)]; });
+  $('toasts').innerHTML = '';
+}
+
+function motd(t){
+  return `<span class="c-faint">grove: session ${esc(t.repo)}/${esc(t.slug)} · ${esc(WT(t))}</span>\n`;
+}
+function addFile(t,p,st,a,d){ if(!t.files.find(f=>f.p===p)) t.files.push({p,st,a,d,staged:false}); }
+function cur(){ return S.tasks[S.cur]; }
+function ask(t,q,opts,on){ t.ask = {q, opts, on}; t.sel = 0; setStatus(t,'waiting'); }
+
+function setStatus(t, s){
+  if (t.status === s) return;
+  t.status = s; t.since = sim; t.renotified = false;
+  t.seen = !((s === 'waiting' || s === 'done') && t !== cur());
+  if (!t.seen)
+    toast(`${t.repo}/${t.slug}`, s === 'waiting' ? 'is waiting for you. Jump with ⌥w' : 'finished its turn. Ready for review (⌥w)', s === 'waiting');
+}
+function needsYou(t){ return t.status === 'waiting' || (t.status === 'done' && !t.seen); }
+
+function answerLogin(t, i){
+  if (i === 2){
+    t.lines.push(L('ag','The matcher fix is one line and keeps auth at the edge. The layout check runs later, so protected pages briefly render a loading state. For this app the matcher fix is the better fit.'));
+    t.ask = {q:'How should I fix it?', opts:['Exclude /login and /auth/* from the matcher','Move the auth check into the (app) layout'], on: answerLogin};
+    t.sel = 0; return 'keep';
+  }
+  t.queue.push(
+    step(20, t => t.lines.push(L('tool','Edit(src/middleware.ts)'), L('res', i === 0 ? 'matcher: exclude /login, /auth/*' : 'removed auth check from middleware'))),
+    step(35, t => { t.lines.push(L('tool','Bash(pnpm test auth)'), L('res','✓ 14 passed (2.3s)')); addFile(t,'tests/auth/redirect.test.ts','A',29,0); }),
+    step(25, t => { t.lines.push(L('ag','Done. Logged-out users land on /login once, and a regression test covers the loop. Ready for your review.')); setStatus(t,'done'); }));
+}
+function answerMigration(t, i){
+  if (i === 2){
+    t.queue.push(step(15, t => { t.lines.push(L('ag','Skipped. Run `dotnet ef migrations add WebhookRateLimit` in the shell when you are ready. Everything else is done.')); setStatus(t,'done'); }));
+    return;
+  }
+  t.queue.push(
+    step(25, t => { t.lines.push(L('res','Build succeeded. Done. To undo this action, use \'ef migrations remove\'')); addFile(t,'src/Data/Migrations/20261106_WebhookRateLimit.cs','A',61,0); }),
+    step(40, t => t.lines.push(L('tool','Bash(dotnet test)'), L('res','Passed! Failed: 0, Passed: 212, Skipped: 0'))),
+    step(20, t => { t.lines.push(L('ag','Done. Each subscriber gets 10 requests per second with bursts of 20, configurable in appsettings. Ready for your review.')); setStatus(t,'done'); }));
+}
+
+/* ---------- clock ---------- */
+function tick(dt){
+  sim += dt;
+  for (const t of S.tasks){
+    if (t.status !== 'waiting' && t.queue.length){
+      t.queue[0].w -= dt;
+      if (t.queue[0].w <= 0){ const s = t.queue.shift(); s.f(t); }
+    }
+    if (t.status === 'waiting' && !t.renotified && sim - t.since > RENOTIFY_AFTER && t !== cur()){
+      t.renotified = true; toast(`${t.repo}/${t.slug}`, 'has been waiting 10 minutes', true);
+    }
+  }
+}
+function age(t){
+  const s = Math.max(0, sim - t.since);
+  if (s < 60) return Math.floor(s)+'s'; if (s < 3600) return Math.floor(s/60)+'m';
+  if (s < 86400) return Math.floor(s/3600)+'h'; return Math.floor(s/86400)+'d';
+}
+function clock(){ const m = 13*60+20 + Math.floor(sim/60); return `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`; }
+
+/* ---------- toasts ---------- */
+function toast(title, body, wait){
+  const el = document.createElement('div');
+  el.className = 'toast' + (wait ? ' wait' : '');
+  el.innerHTML = `<small>grove · ${esc(title)}</small>${esc(body)}`;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 5200);
+}
+
+/* ---------- render ---------- */
+function stats(t){
+  const a = t.files.reduce((s,f)=>s+f.a,0) + t.commits.length*40, d = t.files.reduce((s,f)=>s+f.d,0) + t.commits.length*6;
+  return {a,d};
+}
+function counts(){
+  const c = {waiting:0,working:0,done:0,idle:0}; S.tasks.forEach(t => c[t.status]++); return c;
+}
+function sorted(){
+  return S.tasks.slice().sort((x,y) => ORDER[x.status]-ORDER[y.status] || (x.status==='waiting' ? x.since-y.since : y.since-x.since));
+}
+
+function renderAgent(){
+  const t = cur(), log = $('agLog');
+  const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  $('agHead').textContent = `claude · ${t.repo}/${t.slug}`;
+  $('agState').innerHTML = `<span class="i-${t.status}">${ICON[t.status]} ${t.status}</span>`;
+  let h = t.lines.map(l => l.k === 'tool' ? `<div class="tool"><b>${esc(l.t.split('(')[0])}</b>(${esc(l.t.slice(l.t.indexOf('(')+1))}</div>` : `<div class="${l.k}">${esc(l.t)}</div>`).join('');
+  if (t.status === 'working'){
+    const sp = '✻✶✳✢·'.charAt(spinI % 5);
+    h += `<div class="spin">${sp} Working… <span class="c-faint">(${age(t)} · esc to interrupt)</span></div>`;
+  }
+  log.innerHTML = h;
+  if (stick) log.scrollTop = log.scrollHeight;
+  const askEl = $('agAsk');
+  if (t.status === 'waiting' && t.ask){
+    askEl.innerHTML = `<div class="ask"><div class="q">${esc(t.ask.q)}</div>${t.ask.opts.map((o,i)=>`<button type="button" class="opt${i===t.sel?' sel':''}" data-opt="${i}">${i+1}. ${esc(o)}</button>`).join('')}<div class="h">${t.ask.opts.map((_,i)=>i+1).join('/')} or ↑↓ enter · click this pane or ⌃a ← first</div></div>`;
+    $('agBox').hidden = true;
+  } else {
+    askEl.innerHTML = ''; $('agBox').hidden = false;
+    $('agIn').placeholder = t.status === 'done' ? 'Done. Ask for changes, or review with ⌥e / ⌥c' : t.status === 'idle' ? 'Agent stopped. Type to restart it' : 'Type to queue a message';
+  }
+}
+
+function promptHtml(t){
+  const dirty = t.files.length, ahead = t.ahead;
+  let st = '';
+  if (dirty || ahead) st = ` <span class="c-st">[${dirty?'!'+dirty:''}${ahead?'⇡'+ahead:''}]</span>`;
+  return `<span class="c-dir">${esc(t.slug)}</span> on <span class="c-br">⎇ ${esc(t.branch)}</span>${st}\n<span class="prompt-arrow">❯</span> `;
+}
+function renderRight(){
+  const t = cur();
+  const nv = S.right === 'nvim';
+  $('shLog').hidden = nv; $('shRow').hidden = nv; $('nvim').hidden = !nv;
+  if (nv){ renderNvim(); return; }
+  $('rHead').textContent = `zsh · ${WT(t)}`;
+  $('rState').textContent = '';
+  const log = $('shLog');
+  log.innerHTML = t.shell.join('');
+  $('shPrompt').innerHTML = promptHtml(t).replace('\n','<br>');
+  log.scrollTop = log.scrollHeight;
+}
+
+const CODE = {
+  'src/middleware.ts': [['','import { NextResponse, type NextRequest } from "next/server";'],['',''],['','export function middleware(req: NextRequest) {'],['','  const session = req.cookies.get("session");'],['','  if (!session) {'],['','    return NextResponse.redirect(new URL("/login", req.url));'],['','  }'],['','  return NextResponse.next();'],['','}'],['',''],['','export const config = {'],['+','  matcher: ["/((?!login|auth|_next/static|_next/image|favicon.ico).*)"],'],['','};']],
+  '.grove/brief.md': [['','# {title}'],['',''],['','Ticket: ADO#4812'],['',''],['','## Acceptance'],['','- Logged-out users see /login once, no loop'],['','- Existing sessions are not affected'],['','- Add a regression test'],['',''],['','## Notes'],['','- Prefer keeping auth in middleware']],
+};
+function codeFor(t, p){
+  if (CODE[p]) return CODE[p].map(([m,l]) => [m, l.replace('{title}', t.title)]);
+  const f = t.files.find(x=>x.p===p);
+  const name = p.split('/').pop();
+  const lines = [['',`// ${name}`],['','']];
+  const n = f ? Math.min(f.a, 14) : 6;
+  for (let i=0;i<n;i++) lines.push(['+', i===0 ? (p.endsWith('.cs') ? `public sealed class ${name.replace(/\W.*$/,'')}` : `export function ${name.replace(/\W.*$/,'').replace(/-(\w)/g,(_,c)=>c.toUpperCase())}() {`) : i===1 ? (p.endsWith('.cs')?'{':'  // added by the agent') : `  ${'·'.repeat(4+((i*7)%22))}`]);
+  return lines;
+}
+function nvFiles(t){ return S.nvBrief ? ['.grove/brief.md'] : t.files.map(f=>f.p).concat(t.files.length ? [] : ['README.md']); }
+function renderNvim(){
+  const t = cur(), files = nvFiles(t);
+  S.nv.sel = Math.min(S.nv.sel, files.length-1);
+  const p = files[S.nv.sel] || 'README.md';
+  $('rHead').textContent = `nvim · ${WT(t)}`;
+  $('rState').textContent = S.nvBrief ? 'brief' : `${files.length} changed`;
+  const tree = files.map((f,i) => { const fo = t.files.find(x=>x.p===f); const m = fo ? `<span class="${fo.st==='A'?'c-ok':'c-w'}">${fo.st}</span> ` : '  '; return `<div class="${i===S.nv.sel?'sel':''}" data-nv="${i}">${m}${esc(f.split('/').pop())}</div>`; }).join('');
+  const code = codeFor(t,p).map(([m,l],i) => `<span class="ln${m==='+'?' add':''}"><i>${i+1}</i><u>${m==='+'?'▎':' '}</u>${esc(l)}</span>`).join('');
+  $('nvim').innerHTML = `<div style="display:flex;flex-direction:column;flex:1;min-width:0"><div style="display:flex;flex:1;min-height:0"><div class="nv-tree">${tree}</div><div class="nv-code">${code}</div></div><div class="nv-line"><span><b>NORMAL</b>${esc(p)}</span><span>j/k file · q quit</span></div></div>`;
+}
+
+function renderStatus(){
+  const t = cur(), c = counts();
+  const pfx = S.prefix === 1 ? '<span class="pfx">⌃a</span>' : S.prefix === 3 ? '<span class="pfx">⌥g</span>' : '';
+  $('st1').innerHTML = `<span class="sess">[${esc(t.repo)}/${esc(t.slug)}]</span><span>0:claude*</span>${pfx}<span class="grow"></span><span><span class="i-waiting">⏳${c.waiting}</span> <span class="i-working">●${c.working}</span> <span class="i-done">✓${c.done}</span></span><span>${clock()}</span>`;
+  renderTaskList();
+  $('wintitle').textContent = `${t.repo}/${t.slug} — tmux`;
+  $('pAgent').classList.toggle('focus', S.focus==='agent');
+  $('pRight').classList.toggle('focus', S.focus==='shell');
+}
+
+let VARIANT = 'sidebar';
+const VNOTE = {
+  adaptive: 'Tasks that need you and the current task show their name; the rest shrink to a number and icon.',
+  compact: 'Every task shows number, icon and repo; only the current task shows its full name.',
+  sidebar: 'herdr-style: an always-visible list. Costs about 30 columns in every window.'
+};
+function cls(x,i){
+  return ['chip', x.status==='waiting'?'waiting':'', x.status==='done'&&!x.seen?'fresh':'',
+    x.status==='waiting' && sim-x.since>BLINK_AFTER?'blink':'', i===S.cur?'cur':'', !needsYou(x)&&i!==S.cur?'quiet':''].join(' ');
+}
+function chip(x,i,mode){
+  const slug = x.slug.length>16 ? x.slug.slice(0,15)+'…' : x.slug;
+  const label = mode==='full' ? `${esc(x.repo)}/${esc(slug)}` : mode==='repo' ? esc(x.repo) : '';
+  return `<button type="button" class="${cls(x,i)}" data-jump="${i}" title="${esc(x.repo+'/'+x.slug)}"><span class="c-faint">${i+1}</span> <span class="i-${x.status}">${ICON[x.status]}</span>${label}</button>`;
+}
+function renderTaskList(){
+  const st2 = $('st2'), side = $('side');
+  side.hidden = VARIANT !== 'sidebar'; st2.hidden = VARIANT === 'sidebar';
+  $('variantNote').textContent = VNOTE[VARIANT];
+  if (VARIANT === 'sidebar'){
+    side.innerHTML = `<div class="sh">tasks · ${S.tasks.length}</div>` + S.tasks.map((x,i) => { const s = stats(x);
+      const c = [i===S.cur?'cur':'', x.status==='waiting'?'waiting':'', x.status==='done'&&!x.seen?'fresh':''].join(' ');
+      const what = x.status==='waiting' ? 'needs input' : x.status==='done' ? (x.seen?'done':'done, not seen') : x.status;
+      return `<button type="button" class="${c}" data-jump="${i}"><span class="c-faint">${i+1}</span> <span class="i-${x.status}">${ICON[x.status]}</span> ${esc(x.repo)}/${esc(x.slug)}<small>${what} · ${age(x)} · +${s.a} −${s.d}${x.team?' · team':''}</small></button>`; }).join('');
+    return;
+  }
+  if (VARIANT === 'compact'){ st2.innerHTML = S.tasks.map((x,i)=>chip(x,i, i===S.cur?'full':'repo')).join(''); return; }
+  // adaptive: full names for what needs you, shrink the rest, then fold overflow into +N
+  const modes = S.tasks.map((x,i) => needsYou(x)||i===S.cur ? 'full' : 'short');
+  const draw = (hidden) => {
+    const vis = S.tasks.map((x,i)=>({x,i})).filter(o => !hidden.has(o.i));
+    st2.innerHTML = vis.map(o=>chip(o.x,o.i,modes[o.i])).join('') + (hidden.size ? `<button type="button" class="chip more" data-a="s">+${hidden.size} more ⌥s</button>` : '');
+  };
+  const hidden = new Set();
+  draw(hidden);
+  const order = S.tasks.map((x,i)=>i).filter(i=>i!==S.cur).sort((a,b)=>(needsYou(S.tasks[a])?1:0)-(needsYou(S.tasks[b])?1:0) || b-a);
+  for (const i of order){
+    if (st2.scrollWidth <= st2.clientWidth + 1) break;
+    if (modes[i]==='full' && i!==S.cur){ modes[i]='short'; draw(hidden); continue; }
+  }
+  for (const i of order){
+    if (st2.scrollWidth <= st2.clientWidth + 1) break;
+    if (!needsYou(S.tasks[i])){ hidden.add(i); draw(hidden); }
+  }
+}
+
+function renderHint(){
+  const c = counts(), t = cur();
+  let h;
+  const fresh = S.tasks.filter(x=>x.status==='done'&&!x.seen).length;
+  if (S.popup) h = 'Popup open. <b>esc</b> closes it.';
+  else if (t.status === 'waiting') h = `This agent is asking you something. Click its pane (or <b>⌃a ←</b>) and answer with <b>1</b>, <b>2</b> or <b>3</b>.`;
+  else if (c.waiting) h = `${c.waiting} agent${c.waiting>1?'s are':' is'} waiting on you. Press <b>⌥w</b> (or click the amber task) to jump to the oldest.`;
+  else if (fresh) h = `${fresh} finished task${fresh>1?'s':''} you haven't looked at yet (green). <b>⌥w</b> goes there next.`;
+  else if (t.status === 'done' && t.files.length) h = `Ready for review. Read it in Neovim with <b>⌥e</b>, then commit and push yourself in lazygit with <b>⌥c</b>.`;
+  else if (t.pushed && !t.pr) h = `Pushed. Press <b>⌥g p</b> or type <b>grove pr</b> to open the pull request.`;
+  else h = `Start something new with <b>⌥n</b>, or type <b>grove ls</b> in the shell.`;
+  $('hint').innerHTML = h;
+}
+
+function render(){ renderAgent(); renderRight(); renderStatus(); renderPopup(); renderHint(); }
+
+/* ---------- popups ---------- */
+function openPopup(kind, extra){ S.popup = Object.assign({kind, sel:0}, extra||{}); renderPopup(); renderHint();
+  if (kind === 'new') setTimeout(()=>$('newRepo') && $('newRepo').focus(), 0);
+  else document.activeElement && document.activeElement.blur();
+}
+function closePopup(){ S.popup = null; $('popHost').innerHTML=''; focusPane(); render(); }
+
+function renderPopup(){
+  const P = S.popup, host = $('popHost');
+  if (!P){ host.innerHTML=''; return; }
+  if (P.kind === 'dash'){
+    const list = sorted(); P.list = list; P.sel = Math.min(P.sel, list.length-1);
+    const rows = list.map((t,i) => { const s = stats(t);
+      const pr = t.pr ? `PR #${t.pr.n} ${t.pr.checks==='green'?'✓':'…'}` : t.pushed ? 'pushed' : t.ahead ? `⇡${t.ahead}` : '—';
+      return `<div class="row${i===P.sel?' sel':''}" data-row="${i}"><span class="i-${t.status}">${ICON[t.status]}</span><span class="c-dim">${esc(t.repo)}</span><span class="slug">${esc(t.slug)}</span><span><span class="c-ok">+${s.a}</span> <span class="c-err">−${s.d}</span></span><span class="pr c-dim">${pr}</span><span class="age c-faint">${age(t)}</span></div>`; }).join('');
+    const confirm = P.confirm ? `<div class="pop-foot" style="color:var(--wait)">Discard ${esc(P.confirm.repo)}/${esc(P.confirm.slug)}? Removes worktree and branch. <b>y</b> yes · <b>n</b> no</div>` : '';
+    host.innerHTML = `<div class="pop"><div class="pop-head"><span><b>grove</b> · ${S.tasks.length} tasks</span><span>sorted: waiting, done, working, idle</span></div><div class="pop-body">${rows}</div>${confirm}<div class="pop-foot"><b>⏎</b> jump  <b>j/k</b> move  <b>c</b> lazygit  <b>e</b> nvim  <b>v</b> code  <b>n</b> new  <b>x</b> discard  <b>esc</b> close</div></div>`;
+  } else if (P.kind === 'lazygit'){
+    const t = cur(); P.sel = Math.min(P.sel, Math.max(0,t.files.length-1));
+    const files = t.files.length ? t.files.map((f,i)=>`<div class="f${i===P.sel?' sel':''}" data-lg="${i}"><span class="${f.staged?'c-ok':'c-err'}">${f.staged?'●':'○'} ${f.st}</span> ${esc(f.p)}</div>`).join('') : '<div class="c-faint">Working tree clean</div>';
+    const commits = t.commits.slice().reverse().map(c=>`<div><span class="c-w">${c.h}</span> ${esc(c.m)}</div>`).join('') || '<div class="c-faint">No commits on this branch yet</div>';
+    const msg = P.msg !== undefined ? `<div class="field"><label>message</label><input id="lgMsg" value="${esc(P.msg)}" spellcheck="false"></div>` : '';
+    const s = t.files.find(f=>f.st) && t.files[P.sel];
+    host.innerHTML = `<div class="pop"><div class="pop-head"><span><b>lazygit</b> · ${esc(t.repo)} → ${esc(t.branch)}</span><span>${t.ahead?`⇡${t.ahead} to push`:t.pushed?'up to date with origin':'no upstream'}</span></div><div class="pop-body"><div class="lg"><section><h4>Files</h4>${files}</section><section><h4>Commits</h4>${commits}${s?`<h4 style="margin-top:10px">Diff · ${esc(s.p)}</h4><div class="c-ok">+${s.a} lines</div><div class="c-err">−${s.d} lines</div>`:''}</section></div></div>${msg}<div class="pop-foot">${P.msg!==undefined?'<b>⏎</b> commit  <b>esc</b> cancel':'<b>space</b> stage  <b>a</b> stage all  <b>c</b> commit  <b>P</b> push  <b>j/k</b> move  <b>esc</b> close'}</div></div>`;
+    if (P.msg !== undefined) setTimeout(()=>{ const i=$('lgMsg'); if(i && document.activeElement!==i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length);} },0);
+  } else if (P.kind === 'new'){
+    const q = (P.q||'').toLowerCase();
+    const list = REPOS.filter(r => r.includes(q)); P.list = list; P.sel = Math.min(P.sel, Math.max(0,list.length-1));
+    const repos = list.map((r,i)=>`<div class="repo${i===P.sel?' sel':''}" data-repo="${i}">${esc(REPO_PATH(r))}</div>`).join('') || '<div class="repo c-faint">No repo matches</div>';
+    host.innerHTML = `<div class="pop"><div class="pop-head"><span><b>grove new</b></span><span>worktree, setup, session and agent in one go</span></div><div class="pop-body"><div class="field"><label>repo</label><input id="newRepo" value="${esc(P.q||'')}" placeholder="type to filter" spellcheck="false" autocomplete="off"></div>${repos}<div class="field" style="margin-top:8px"><label>title</label><input id="newTitle" value="${esc(P.title||'')}" placeholder="Add retry to Fortnox sync" spellcheck="false" autocomplete="off"></div><div class="field"><label>team</label><button type="button" class="tog" id="newTeam" aria-pressed="${P.team?'true':'false'}">${P.team?'on':'off'}</button><span class="c-faint">${P.team?'lead plus teammates, each in its own pane':'one agent (default from config)'}</span></div></div><div class="pop-foot"><b>↑↓</b> repo  <b>tab</b> next field  <b>⌥t</b> team  <b>⏎</b> create  <b>esc</b> cancel</div></div>`;
+    const focusId = P.field === 'title' ? 'newTitle' : 'newRepo';
+    setTimeout(()=>{ const i=$(focusId); if(i && document.activeElement!==i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length);} },0);
+  }
+}
+
+/* ---------- actions ---------- */
+function focusPane(){
+  if (S.popup) return;
+  if (S.focus === 'agent'){ if (!$('agBox').hidden) $('agIn').focus(); else document.activeElement && document.activeElement.blur(); }
+  else if (S.right === 'nvim') $('nvim').focus();
+  else $('shIn').focus({preventScroll:true});
+}
+function setFocus(f){ S.focus = f; renderStatus(); focusPane(); }
+function jump(i){
+  if (i < 0 || i >= S.tasks.length) return;
+  if (i !== S.cur){ S.last = S.cur; S.cur = i; }
+  if (cur().status === 'done') cur().seen = true;
+  S.right = 'shell'; S.nvBrief = false;
+  S.focus = cur().status === 'waiting' ? 'agent' : 'shell';
+  render(); focusPane();
+}
+function nextWaiting(){
+  const w = S.tasks.map((t,i)=>({t,i})).filter(x=>needsYou(x.t) || (x.i===S.cur && x.t.status==='waiting'))
+    .sort((a,b)=>(a.t.status==='waiting'?0:1)-(b.t.status==='waiting'?0:1) || a.t.since-b.t.since);
+  if (!w.length){ toast('grove','Nothing needs you right now',false); return; }
+  const n = w.find(x=>x.i!==S.cur) || w[0];
+  jump(n.i);
+}
+function openNvim(brief){ S.right='nvim'; S.nvBrief=!!brief; S.nv.sel=0; S.focus='shell'; render(); focusPane(); }
+function openCode(){ toast('VS Code', `Opened ${WT(cur())}`, false); shellEcho(`<span class="c-faint">grove: code ${esc(WT(cur()))}</span>\n`); }
+function shellEcho(h){ cur().shell.push(h); renderRight(); }
+
+function doAction(a){
+  S.prefix = 0;
+  if (/^[1-9]$/.test(a)) return jump(+a-1);
+  if (S.popup) closePopup();
+  ({ s:()=>openPopup('dash'), n:()=>openPopup('new'), w:nextWaiting, l:()=>S.last!==null && S.last < S.tasks.length && jump(S.last),
+     c:()=>openPopup('lazygit'), e:()=>openNvim(false), v:openCode, b:()=>openNvim(true),
+     p:()=>{ S.right='shell'; S.focus='shell'; render(); run('grove pr'); focusPane(); },
+     x:()=>{ openPopup('dash'); const P=S.popup; renderPopup(); P.sel = P.list.indexOf(cur()); const t=cur();
+       if (t.files.length || t.ahead) toast('grove', `${t.repo}/${t.slug} has uncommitted or unpushed work. Use grove rm --force in its shell.`, true); else P.confirm = t; renderPopup(); },
+     left:()=>setFocus('agent'), right:()=>setFocus('shell'),
+     sh:()=>{ S.right='shell'; setFocus('shell'); } }[a] || (()=>{}))();
+  renderStatus(); renderHint();
+}
+
+function choose(i){
+  const t = cur(); if (t.status !== 'waiting' || !t.ask || i >= t.ask.opts.length) return;
+  t.lines.push(L('you', t.ask.opts[i]));
+  const on = t.ask.on; const r = on(t, i);
+  if (r !== 'keep'){ t.ask = null; setStatus(t, 'working'); }
+  render();
+}
+function sendToAgent(msg){
+  const t = cur(); if (!msg.trim()) return;
+  t.lines.push(L('you', msg));
+  if (t.status === 'idle') t.lines.push(L('sys','claude --continue'));
+  setStatus(t,'working');
+  t.queue.push(step(25, t => { t.lines.push(L('tool','Edit(…)'), L('res','Applied the change')); }),
+               step(20, t => { t.lines.push(L('ag','Done. That change is in the worktree.')); if(!t.files.length) addFile(t,'src/index.ts','M',8,2); setStatus(t,'done'); }));
+  render();
+}
+
+function createTask(repo, title, team){
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32) || 'task';
+  const t = T({n:S.nextN++, repo, slug, title, status:'idle', since:sim, setup: repo==='api'||repo==='integrations' ? 'dotnet' : 'pnpm'});
+  const port = 4300 + t.n*10;
+  const setup = t.setup === 'dotnet' ? 'dotnet restore  … restored 14 projects (6.2s)' : 'pnpm install --frozen-lockfile  … done in 4.1s';
+  t.shell = [ `<span class="c-faint">grove: fetching origin/main
+grove: git worktree add -b ${esc(t.branch)} ${esc(WT(t))} origin/main
+grove: copied .env.local · symlinked node_modules/.cache
+grove: ${esc(setup)}
+grove: wrote .grove/brief.md (excluded from git)
+grove: session ${esc(repo)}/${esc(slug)} · GROVE_PORT=${port}
+grove: started claude on the brief${team?' (agent team)':''}</span>\n` ];
+  t.team = !!team;
+  t.lines = [L('you','Read .grove/brief.md and start.'), L('tool','Read(.grove/brief.md)'), L('res','Read 6 lines')];
+  if (t.team) t.lines.push(L('sys','Team mode: spawning 2 teammates in their own tmux panes'));
+  t.queue = [ step(30, t => { t.lines.push(L('ag',`Working on: ${t.title}.`), L('tool','Grep(…)'), L('res','Found 4 matches')); }),
+              step(45, t => { t.lines.push(L('tool','Edit(src/…)'), L('res','Applied')); addFile(t, t.setup==='dotnet'?'src/Sync/RetryPolicy.cs':'src/lib/retry.ts','A',46,0); }),
+              step(40, t => ask(t, 'I found two callers. Apply the change to both, or only the one in the brief?', ['Both callers','Only the one in the brief'], (t,i)=>{ t.queue.push(step(30, t=>{ t.lines.push(L('ag','Done. Ready for your review.')); setStatus(t,'done'); })); })) ];
+  S.tasks.push(t); S.last = S.cur; S.cur = S.tasks.length-1; t.status = 'working'; t.since = sim;
+  S.right='shell'; S.focus='shell';
+}
+
+function removeTask(t){
+  const i = S.tasks.indexOf(t); if (i<0) return;
+  S.tasks.splice(i,1);
+  if (!S.tasks.length){ seed(); return; }
+  S.cur = Math.min(S.cur >= i ? Math.max(0,S.cur-1) : S.cur, S.tasks.length-1); S.last = null;
+}
+
+/* ---------- shell ---------- */
+function run(line){
+  const t = cur();
+  const echo = promptHtml(t) + esc(line) + '\n';
+  const out = [];
+  const o = (s='') => out.push(s);
+  const parts = line.trim().match(/"[^"]*"|\S+/g) || [];
+  const [c0, c1] = parts;
+  if (!c0){ t.shell.push(echo); return renderRight(); }
+  if (c0 === 'clear'){ t.shell = []; return renderRight(); }
+  if (c0 === 'help'){
+    o(`<span class="c-dim">grove ls · grove new "title" [--repo name] · grove pr · grove open nvim|code|lazygit
+grove rm [--force] · grove gc · git status · git log · lazygit · nvim · code .
+pnpm test · dotnet test · ls · pwd · clear</span>`);
+  } else if (c0 === 'pwd'){ o(esc(WT(t)));
+  } else if (c0 === 'ls'){ o(t.setup==='dotnet' ? 'README.md  src  tests  Api.sln  appsettings.json' : t.setup==='pnpm' ? 'README.md  next.config.ts  package.json  pnpm-lock.yaml  src  tests' : 'README.md  install.conf.yaml  zsh  ghostty  nvim');
+  } else if (c0 === 'git' && c1 === 'status'){
+    o(`On branch ${esc(t.branch)}`);
+    o(t.pushed ? (t.ahead ? `Your branch is ahead of 'origin/${esc(t.branch)}' by ${t.ahead} commit(s).` : `Your branch is up to date with 'origin/${esc(t.branch)}'.`) : 'No upstream branch yet.');
+    const st = t.files.filter(f=>f.staged), un = t.files.filter(f=>!f.staged);
+    if (st.length){ o('Changes to be committed:'); st.forEach(f=>o(`<span class="c-ok">\t${f.st==='A'?'new file:':'modified:'}   ${esc(f.p)}</span>`)); }
+    if (un.length){ o('Changes not staged for commit:'); un.forEach(f=>o(`<span class="c-err">\t${f.st==='A'?'new file:':'modified:'}   ${esc(f.p)}</span>`)); }
+    if (!t.files.length) o('nothing to commit, working tree clean');
+  } else if (c0 === 'git' && c1 === 'log'){
+    t.commits.slice().reverse().forEach(c=>o(`<span class="c-w">${c.h}</span> ${esc(c.m)}`)); o(`<span class="c-w">3b7d0a1</span> <span class="c-dim">(origin/main) Merge pull request #229</span>`);
+  } else if (c0 === 'git' && (c1 === 'commit' || c1 === 'push' || c1 === 'add')){
+    o('<span class="c-dim">Works as usual in a real shell. Here, use lazygit: ⌥c</span>');
+  } else if (c0 === 'lazygit'){ t.shell.push(echo); renderRight(); return openPopup('lazygit');
+  } else if (c0 === 'nvim' || c0 === 'vim'){ t.shell.push(echo); return openNvim(false);
+  } else if (c0 === 'code'){ t.shell.push(echo); return openCode();
+  } else if (c0 === 'pnpm' || c0 === 'npm'){ o(c1==='test' ? '<span class="c-ok"> ✓</span> 41 tests passed (3.2s)' : `<span class="c-dim">${esc(line)}: done</span>`);
+  } else if (c0 === 'dotnet'){ o(c1==='test' ? 'Passed!  - Failed: 0, Passed: 212, Skipped: 0, Total: 212' : c1==='ef' ? 'Build succeeded. Done.' : 'Build succeeded.');
+  } else if (c0 === 'grove'){
+    const sub = c1;
+    if (sub === 'ls'){
+      o(`<span class="c-faint">#  ST  REPO       TASK                        DIFF        PR</span>`);
+      S.tasks.forEach(x=>{ const s=stats(x); o(`${String(x.n).padEnd(2)} <span class="i-${x.status}">${ICON[x.status]}</span>   ${esc(x.repo.padEnd(10))} ${esc(x.slug.padEnd(27).slice(0,27))} <span class="c-ok">+${String(s.a).padEnd(4)}</span><span class="c-err">−${String(s.d).padEnd(5)}</span> ${x.pr?'#'+x.pr.n:x.pushed?'pushed':'—'}`); });
+    } else if (sub === 'new'){
+      const ti = parts.find(p=>p.startsWith('"')); const ri = parts.indexOf('--repo');
+      const repo = ri>0 ? parts[ri+1] : t.repo;
+      if (!ti){ o('<span class="c-err">grove: give the task a title, e.g. grove new "Add retry to Fortnox sync" --repo integrations</span>'); }
+      else if (!REPOS.includes(repo)){ o(`<span class="c-err">grove: no repo named ${esc(repo)} in ${ROOT}</span>`); }
+      else { t.shell.push(echo); createTask(repo, ti.replace(/"/g,'')); render(); focusPane(); return; }
+    } else if (sub === 'pr'){
+      if (!t.pushed) o(`<span class="c-err">grove: ${esc(t.branch)} has no upstream. Push it first (lazygit: P). grove never pushes for you.</span>`);
+      else if (t.ahead) o(`<span class="c-w">grove: you have ${t.ahead} unpushed commit(s). Push them in lazygit first.</span>`);
+      else if (t.pr) o(`PR #${t.pr.n} · open · checks ${t.pr.checks==='green'?'<span class="c-ok">passing</span>':'<span class="c-w">running</span>'}`);
+      else { t.pr = {n:230+t.n, checks:'pending'}; o(`gh pr create --fill --head ${esc(t.branch)}`); o(`<span class="c-ok">Opened PR #${t.pr.n}</span> · https://github.com/acme/${esc(t.repo)}/pull/${t.pr.n}`);
+        t.queue.push(step(60, x=>{ x.pr.checks='green'; toast(`${x.repo}/${x.slug}`, `PR #${x.pr.n}: all checks passed`, false); })); }
+    } else if (sub === 'open'){
+      const tool = parts[2]; t.shell.push(echo); renderRight();
+      if (tool === 'code') return openCode(); if (tool === 'lazygit') return openPopup('lazygit'); return openNvim(false);
+    } else if (sub === 'rm'){
+      const force = parts.includes('--force');
+      if (!force && (t.files.length || t.ahead)) o(`<span class="c-w">grove: ${t.files.length} uncommitted file(s), ${t.ahead} unpushed commit(s). Refusing. Use grove rm --force to discard.</span>`);
+      else { const name = `${t.repo}/${t.slug}`; removeTask(t); toast('grove', `Removed ${name}: session, worktree and branch`, false); render(); focusPane(); return; }
+    } else if (sub === 'gc'){
+      const merged = S.tasks.filter(x=>x.pr && x.pr.checks==='green');
+      o(merged.length ? `Would remove (PR merged upstream): ${merged.map(x=>esc(x.repo+'/'+x.slug)).join(', ')}\n<span class="c-dim">Simulator: merging happens on GitHub, so nothing is removed here.</span>` : 'Nothing to clean up.');
+    } else o('<span class="c-dim">usage: grove ls | new | pr | open | rm | gc</span>');
+  } else {
+    o(`zsh: command not found: ${esc(c0)}`);
+  }
+  t.shell.push(echo + (out.length ? out.join('\n') + '\n' : ''));
+  renderRight(); renderHint();
+}
+
+/* ---------- input ---------- */
+const ALT_MAP = {KeyW:'w', KeyS:'s', Tab:'l', KeyC:'c', KeyE:'e', KeyV:'v', KeyN:'n'};
+const LEADER_MAP = {KeyB:'b', KeyP:'p', KeyX:'x'};
+document.addEventListener('keydown', e => {
+  const k = e.key, code = e.code;
+  if (['Alt','Control','Shift','Meta','AltGraph'].includes(k)) return;
+  if (e.ctrlKey && !e.altKey && (k === 'a' || k === 'A')){ e.preventDefault(); S.prefix = 1; renderStatus(); return; }
+  if (S.prefix === 1){
+    e.preventDefault();
+    if (k === 'ArrowLeft') return doAction('left');
+    if (k === 'ArrowRight') return doAction('right');
+    if (k === 'o') return setFocus(S.focus==='agent'?'shell':'agent'), (S.prefix=0), renderStatus();
+    S.prefix = 0; renderStatus(); return;
+  }
+  if (S.prefix === 3){
+    e.preventDefault();
+    if (LEADER_MAP[code]) return doAction(LEADER_MAP[code]);
+    S.prefix = 0; renderStatus(); return;
+  }
+  if (e.altKey && !e.ctrlKey && !e.metaKey){
+    if (code === 'KeyG'){ e.preventDefault(); S.prefix = 3; renderStatus(); return; }
+    const d = /^Digit([1-9])$/.exec(code);
+    if (d){ e.preventDefault(); return doAction(d[1]); }
+    if (ALT_MAP[code]){ e.preventDefault(); return doAction(ALT_MAP[code]); }
+  }
+  if (S.popup) return popupKey(e);
+  const t = cur();
+  if (S.focus === 'agent' && t.status === 'waiting' && t.ask){
+    if (/^[1-9]$/.test(k)){ e.preventDefault(); return choose(+k-1); }
+    if (k === 'ArrowDown' || k === 'j'){ e.preventDefault(); t.sel = (t.sel+1)%t.ask.opts.length; return renderAgent(); }
+    if (k === 'ArrowUp' || k === 'k'){ e.preventDefault(); t.sel = (t.sel-1+t.ask.opts.length)%t.ask.opts.length; return renderAgent(); }
+    if (k === 'Enter'){ e.preventDefault(); return choose(t.sel); }
+  }
+  if (S.focus === 'shell' && S.right === 'nvim' && document.activeElement === $('nvim')){
+    const files = nvFiles(t);
+    if (k === 'q' || k === 'Escape'){ e.preventDefault(); S.right='shell'; S.nvBrief=false; render(); focusPane(); }
+    else if (k === 'j' || k === 'ArrowDown'){ e.preventDefault(); S.nv.sel = Math.min(files.length-1, S.nv.sel+1); renderNvim(); }
+    else if (k === 'k' || k === 'ArrowUp'){ e.preventDefault(); S.nv.sel = Math.max(0, S.nv.sel-1); renderNvim(); }
+  }
+}, true);
+
+function popupKey(e){
+  const P = S.popup, k = e.key, t = cur();
+  if (k === 'Escape'){ e.preventDefault(); if (P.kind==='lazygit' && P.msg!==undefined){ delete P.msg; return renderPopup(); } if (P.confirm){ P.confirm=null; return renderPopup(); } return closePopup(); }
+  if (P.kind === 'dash'){
+    e.preventDefault();
+    if (P.confirm){ if (k==='y'){ const x=P.confirm; removeTask(x); toast('grove',`Removed ${x.repo}/${x.slug}`,false); P.confirm=null; render(); } else if (k==='n') { P.confirm=null; renderPopup(); } return; }
+    if (k==='j'||k==='ArrowDown'){ P.sel=Math.min(P.list.length-1,P.sel+1); return renderPopup(); }
+    if (k==='k'||k==='ArrowUp'){ P.sel=Math.max(0,P.sel-1); return renderPopup(); }
+    if (k==='q') return closePopup();
+    const target = P.list[P.sel]; const idx = S.tasks.indexOf(target);
+    if (k==='Enter'){ S.popup=null; return jump(idx); }
+    if (k==='c'||k==='e'||k==='o'||k==='v'){ S.popup=null; jump(idx); return doAction(k==='o'?'e':k); }
+    if (k==='n') return openPopup('new');
+    if (k==='x'){ if (target.files.length || target.ahead){ toast('grove', `${target.repo}/${target.slug} has uncommitted or unpushed work. Use grove rm --force in its shell.`, true); return; } P.confirm = target; return renderPopup(); }
+    return;
+  }
+  if (P.kind === 'lazygit'){
+    if (P.msg !== undefined){
+      if (k === 'Enter'){ e.preventDefault(); const m = $('lgMsg').value.trim(); const st = t.files.filter(f=>f.staged);
+        if (!m || !st.length){ toast('lazygit', st.length ? 'Write a commit message' : 'Stage at least one file first (space)', true); return; }
+        t.files = t.files.filter(f=>!f.staged); t.commits.push({h: Math.random().toString(16).slice(2,9), m}); t.ahead++; delete P.msg; renderPopup(); renderRight(); renderHint(); }
+      return;
+    }
+    e.preventDefault();
+    if (k==='j'||k==='ArrowDown'){ P.sel=Math.min(t.files.length-1,P.sel+1); return renderPopup(); }
+    if (k==='k'||k==='ArrowUp'){ P.sel=Math.max(0,P.sel-1); return renderPopup(); }
+    if (k===' '){ const f=t.files[P.sel]; if(f){ f.staged=!f.staged; renderPopup(); } return; }
+    if (k==='a'){ const all = t.files.every(f=>f.staged); t.files.forEach(f=>f.staged=!all); return renderPopup(); }
+    if (k==='c'){ if(!t.files.some(f=>f.staged)){ toast('lazygit','Stage at least one file first (space)',true); return; } P.msg = defaultMsg(t); return renderPopup(); }
+    if (k==='P'){ if(!t.ahead){ toast('lazygit', t.pushed?'Nothing to push':'Commit something first', false); return; } t.ahead=0; t.pushed=true; toast('lazygit',`Pushed ${t.branch} to origin`,false); renderPopup(); renderRight(); renderHint(); return; }
+    if (k==='q') return closePopup();
+    return;
+  }
+  if (P.kind === 'new'){
+    const rIn = $('newRepo'), tIn = $('newTitle');
+    if (e.altKey && e.code === 'KeyT'){ e.preventDefault(); P.team=!P.team; P.q=rIn.value; P.title=tIn.value; return renderPopup(); }
+    if (k === 'Tab'){ e.preventDefault(); P.q = rIn.value; P.title = tIn.value; P.field = P.field==='title'?'repo':'title'; return renderPopup(); }
+    if (k === 'ArrowDown'){ e.preventDefault(); P.sel = Math.min(P.list.length-1, P.sel+1); P.q=rIn.value; P.title=tIn.value; return renderPopup(); }
+    if (k === 'ArrowUp'){ e.preventDefault(); P.sel = Math.max(0, P.sel-1); P.q=rIn.value; P.title=tIn.value; return renderPopup(); }
+    if (k === 'Enter'){ e.preventDefault(); const repo = P.list[P.sel]; const title = tIn.value.trim();
+      if (!repo){ toast('grove','Pick a repo',true); return; }
+      if (!title){ P.q=rIn.value; P.field='title'; renderPopup(); toast('grove','Give the task a title',true); return; }
+      const team = !!P.team; S.popup = null; createTask(repo, title, team); render(); focusPane(); }
+  }
+}
+function defaultMsg(t){ return t.title; }
+
+$('popHost').addEventListener('input', e => {
+  const P = S.popup; if (!P) return;
+  if (e.target.id === 'newRepo'){ P.q = e.target.value; P.sel = 0; P.field='repo'; P.title = $('newTitle').value; renderPopup(); }
+  if (e.target.id === 'newTitle'){ P.title = e.target.value; }
+  if (e.target.id === 'lgMsg'){ P.msg = e.target.value; }
+});
+$('popHost').addEventListener('click', e => {
+  const P = S.popup; if (!P) return;
+  const r = e.target.closest('[data-row]'); if (r){ const t = P.list[+r.dataset.row]; S.popup=null; return jump(S.tasks.indexOf(t)); }
+  const lg = e.target.closest('[data-lg]'); if (lg){ const f = cur().files[+lg.dataset.lg]; P.sel=+lg.dataset.lg; if (f) f.staged=!f.staged; return renderPopup(); }
+  const rp = e.target.closest('[data-repo]'); if (rp){ P.sel=+rp.dataset.repo; P.q=$('newRepo').value; P.title=$('newTitle').value; P.field='title'; return renderPopup(); }
+  if (e.target.id === 'newTeam'){ P.team=!P.team; P.q=$('newRepo').value; P.title=$('newTitle').value; return renderPopup(); }
+  if (e.target.id === 'newTitle') P.field='title';
+  if (e.target.id === 'newRepo') P.field='repo';
+});
+document.addEventListener('mousedown', e => { if (S.popup && !e.target.closest('.pop') && !e.target.closest('.keys') && e.target.closest('.term')) closePopup(); });
+
+$('shIn').addEventListener('keydown', e => { if (e.key === 'Enter' && !S.popup){ const v = e.target.value; e.target.value=''; run(v); } });
+$('agIn').addEventListener('keydown', e => { if (e.key === 'Enter' && !S.popup){ const v = e.target.value; e.target.value=''; sendToAgent(v); } });
+$('pAgent').addEventListener('mousedown', e => { if (!e.target.closest('input')) setTimeout(()=>setFocus('agent'),0); else S.focus='agent', renderStatus(); });
+$('pRight').addEventListener('mousedown', e => { if (!e.target.closest('input')) setTimeout(()=>setFocus('shell'),0); else S.focus='shell', renderStatus(); });
+$('agAsk').addEventListener('click', e => { const b = e.target.closest('[data-opt]'); if (b){ S.focus='agent'; choose(+b.dataset.opt); } });
+$('nvim').addEventListener('click', e => { const d = e.target.closest('[data-nv]'); if (d){ S.nv.sel=+d.dataset.nv; renderNvim(); $('nvim').focus(); } });
+const listClick = e => { const b = e.target.closest('[data-jump]'); if (b) return jump(+b.dataset.jump); const a = e.target.closest('[data-a]'); if (a) doAction(a.dataset.a); };
+$('st2').addEventListener('click', listClick);
+$('side').addEventListener('click', listClick);
+$('variant').addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (!b) return; VARIANT = b.dataset.v;
+  [...$('variant').children].forEach(x => x.setAttribute('aria-pressed', String(x === b))); renderTaskList(); focusPane(); });
+window.addEventListener('resize', () => renderTaskList());
+$('keys').addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) doAction(b.dataset.a); });
+$('reset').addEventListener('click', () => { seed(); render(); focusPane(); });
+
+seed(); render();
+setInterval(() => { tick(SPEED); spinI++; renderAgent(); renderStatus(); renderHint(); if (S.popup && S.popup.kind==='dash' && !S.popup.confirm) renderPopup(); }, 1000);
+})();
+</script>
