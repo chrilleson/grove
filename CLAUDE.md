@@ -7,6 +7,7 @@ Rust CLI/TUI that runs one Claude Code agent per git worktree, each in its own t
 - `docs/spec.md` — what grove does. The spec wins over code comments and old design docs.
 - `GLOSSARY.md` — use these terms in code, tests and issues (task, needs you, seen, root, …).
 - `docs/adr/` — decisions not to relitigate without a new ADR.
+- `docs/design/` — screenshots of the design simulator. Open the PNGs when building anything visible (sidebar, dashboard, popups, `⌥n` dialog). The spec wins where they differ.
 
 ## Tracker
 
