@@ -1,8 +1,10 @@
 pub mod cli;
 pub mod config;
+pub mod dash;
 pub mod hook;
 pub mod init;
 pub mod mux;
+pub mod newtask;
 pub mod notify;
 pub mod paths;
 pub mod setup;
@@ -10,6 +12,7 @@ pub mod sidebar;
 pub mod store;
 pub mod task;
 pub mod theme;
+pub mod ui;
 
 /// Unix seconds.
 pub fn now() -> i64 {

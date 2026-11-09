@@ -48,6 +48,11 @@ fn new_creates_worktree_setup_and_session() {
         (t.number, t.port_base, t.session.as_str()),
         (1, 20000, "api/fix-login")
     );
+    assert_eq!(
+        t.base.as_deref(),
+        Some("main"),
+        "no origin: fork from the current branch by name"
+    );
 
     let panes = w.tmux(&["list-panes", "-t", "=api/fix-login", "-F", "#{pane_current_path}"]);
     assert_eq!(panes.lines().count(), 3, "sidebar | agent | shell: {panes}");
@@ -73,7 +78,21 @@ fn new_creates_worktree_setup_and_session() {
         "#{@grove_role}|#{@grove_title}",
     ]);
     let lines: Vec<_> = panes.lines().collect();
-    assert_eq!(lines[0], "sidebar|tasks");
+    // the sidebar writes its own header with the task count
+    let sidebar = wait_for(|| {
+        let l = w.tmux(&[
+            "list-panes",
+            "-t",
+            "=api/fix-login",
+            "-F",
+            "#{@grove_role}|#{@grove_title}",
+        ]);
+        l.lines()
+            .next()
+            .filter(|l| *l == "sidebar|tasks · 1")
+            .map(String::from)
+    });
+    assert!(sidebar.is_some(), "{panes}");
     assert_eq!(lines[1], "agent|claude · api/fix-login");
     assert!(lines[2].starts_with("shell|"), "{panes}");
     assert_eq!(
